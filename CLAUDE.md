@@ -31,8 +31,9 @@ uv run alembic revision --autogenerate -m "..."
 uv run alembic upgrade head
 ```
 
-The Data Admin page in the Streamlit app (`app/pages/5_Data_Admin.py`) also runs
-`scripts.refresh_data` as a subprocess, so scraper changes are exercised from the UI too.
+The Data Admin page in the Streamlit app (`app/pages/7_Data_Admin.py`) also runs
+`scripts.refresh_data` as a subprocess, so scraper changes are exercised from the UI too —
+this trigger is disabled when `IS_DEPLOYED` is set in `st.secrets` (see "Deployment" below).
 
 ## Architecture
 
@@ -161,6 +162,39 @@ uv run python -m scripts.refresh_data --leagues nbl,d2,d3,d4,d5 --years 2026
 ```
 This is documentation of the recommended process, not automation — no scheduled job runs
 this today.
+
+## Deployment
+
+The app is deployed to Streamlit Community Cloud as a **read-only** consumer of a committed,
+pre-built `data/stats.db` — the live scraper never runs on the deployed instance (ephemeral
+filesystem, no auth, blocking requests make that unsafe there). Data collection stays exactly
+the process above, run locally; the only addition is committing the result:
+
+1. `uv run alembic upgrade head` — ensure the DB about to be committed has the current schema.
+2. `uv run python -m scripts.refresh_data --leagues nbl,d2,d3,d4,d5 --years 2026` — let it
+   exit normally so SQLite's WAL checkpoints cleanly (an abrupt kill can leave `data/stats.db`
+   mid-transaction relative to its `-wal` file, which `.gitignore` excludes from commits).
+3. `git add data/stats.db` and commit/push — Community Cloud auto-redeploys on push.
+
+`data/stats.db` is tracked in git (`.gitignore` un-ignores just that file; `data/raw_cache/`
+and WAL sidecars stay ignored). Since SQLite files aren't diff-friendly, each commit stores a
+full new blob — fine at the current ~10MB size, but reconsider (Git LFS or an external store)
+if it grows past roughly 50-100MB.
+
+Community Cloud installs from `requirements.txt` (it doesn't reliably support this repo's
+PEP 621 `pyproject.toml`/`uv.lock` — it assumes Poetry format for `pyproject.toml` and doesn't
+read `uv.lock` at all). Regenerate it after any dependency change:
+```
+uv lock
+uv export --format requirements-txt --no-hashes --no-dev -o requirements.txt
+```
+`playwright` lives in the `recon` optional-dependency group (`uv sync --extra recon` to get
+it locally) precisely so the default export above — and the deployed install — excludes it;
+it's only used by the one-off spike in `scraper/recon/`, not the runtime pipeline or app.
+
+The `IS_DEPLOYED` flag is set as a secret in the Community Cloud dashboard (never committed);
+`app/pages/7_Data_Admin.py` reads it via `st.secrets.get("IS_DEPLOYED", False)` to hide the
+live-refresh controls while leaving the ScrapeLog history view visible everywhere.
 
 ## Testing
 
