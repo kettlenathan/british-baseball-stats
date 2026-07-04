@@ -20,6 +20,8 @@ from db.upsert import upsert
 _BATTING_COUNT_FIELDS = [
     "pa", "ab", "r", "h", "doubles", "triples", "hr", "rbi", "bb", "ibb",
     "hbp", "so", "sf", "sh", "sb", "cs", "gdp",
+    "field_po", "field_a", "field_e", "field_dp",
+    "risp_ab", "risp_h",
 ]
 
 _PITCHING_COUNT_FIELDS = ["outs_recorded", "h", "r", "er", "bb", "ibb", "so", "hr", "hbp", "bf"]

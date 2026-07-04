@@ -73,13 +73,13 @@ def test_aggregate_batting_sums_across_games(session):
     session.add(
         BattingGameLine(
             game_id=games[0].id, player_season_id=player_season.id, team_season_id=team_season.id,
-            pa=4, ab=3, h=2, doubles=1, bb=1,
+            pa=4, ab=3, h=2, doubles=1, bb=1, field_po=2, risp_ab=1, risp_h=1,
         )
     )
     session.add(
         BattingGameLine(
             game_id=games[1].id, player_season_id=player_season.id, team_season_id=team_season.id,
-            pa=5, ab=4, h=1, hr=1, so=2,
+            pa=5, ab=4, h=1, hr=1, so=2, field_po=1, risp_ab=2, risp_h=0,
         )
     )
     session.commit()
@@ -95,6 +95,9 @@ def test_aggregate_batting_sums_across_games(session):
     assert row.hr == 1
     assert row.bb == 1
     assert row.so == 2
+    assert row.field_po == 3
+    assert row.risp_ab == 3
+    assert row.risp_h == 1
 
 
 def test_aggregate_pitching_sums_across_games(session):

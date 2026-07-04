@@ -14,8 +14,14 @@ BATTING_COLUMN_CONFIG = {
     "woba": st.column_config.NumberColumn(format="%.3f"),
     "wrc_plus": st.column_config.NumberColumn("wRC+", format="%.0f"),
     "war": st.column_config.NumberColumn("WAR", format="%.2f"),
-    "bb_pct": st.column_config.NumberColumn("BB%", format="%.1%"),
-    "k_pct": st.column_config.NumberColumn("K%", format="%.1%"),
+    "bb_pct": st.column_config.NumberColumn("BB%", format="percent"),
+    "k_pct": st.column_config.NumberColumn("K%", format="percent"),
+    "po": st.column_config.NumberColumn("PO", format="%d"),
+    "a": st.column_config.NumberColumn("A", format="%d"),
+    "e": st.column_config.NumberColumn("E", format="%d"),
+    "dp": st.column_config.NumberColumn("DP", format="%d"),
+    "fpct": st.column_config.NumberColumn("FPCT", format="%.3f"),
+    "avg_risp": st.column_config.NumberColumn("AVG w/RISP", format="%.3f"),
 }
 
 PITCHING_COLUMN_CONFIG = {
@@ -31,4 +37,11 @@ PITCHING_COLUMN_CONFIG = {
 
 PCT_COLUMN_CONFIG = {
     "pct": st.column_config.NumberColumn(format="%.3f"),
+}
+
+TEAM_COLUMN_CONFIG = {
+    "pct": st.column_config.NumberColumn("Win %", format="%.3f"),
+    "r_pg": st.column_config.NumberColumn("R/G", format="%.2f"),
+    "ra_pg": st.column_config.NumberColumn("RA/G", format="%.2f"),
+    "lob_pg": st.column_config.NumberColumn("LOB/G", format="%.2f"),
 }

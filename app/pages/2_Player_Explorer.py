@@ -26,6 +26,7 @@ if category == "Batting":
     numeric_cols = [
         "pa", "ab", "h", "doubles", "triples", "hr", "rbi", "bb", "so", "sb",
         "avg", "obp", "slg", "ops", "iso", "bb_pct", "k_pct", "woba", "wrc_plus", "war",
+        "po", "a", "e", "dp", "fpct", "avg_risp",
     ]
     column_config = BATTING_COLUMN_CONFIG
 else:
@@ -49,6 +50,7 @@ y_axis = col2.selectbox("Y axis", numeric_cols, index=min(1, len(numeric_cols) -
 
 fig = scatter_chart(df, x_axis, y_axis)
 st.plotly_chart(fig, use_container_width=True)
+st.caption("Dotted lines mark the average across shown players.")
 
 with st.expander("Underlying data"):
     st.dataframe(df, hide_index=True, use_container_width=True, column_config=column_config)

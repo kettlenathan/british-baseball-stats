@@ -10,9 +10,18 @@ fields together on the same object — a two-way player has both non-zero.
 Records are grouped by playerid and summed before upserting, since a player
 who appears in multiple lineup-spot entries (pinch hit / substitution) would
 otherwise only have their last entry's stats kept.
+
+The same payload's `viewData.original.gamePlays.all` is a play-by-play feed
+(sibling of boxScore, not surfaced in the site's own UI) — a dict keyed by
+inning number, each value {"top": [...], "bottom": [...]} of per-play
+records with before/after base-runner state. See
+scraper/recon/risp_lob_plan.md for how this is used: RISP at-bats/hits per
+batter (folded into batting_game_lines) and runners left on base per team
+per game (folded into games.home_lob/away_lob). `batterid` in these records
+is confirmed to be the same id space as boxScore's `playerid` (verified: a
+game's gamePlays batterids are always a subset of its boxScore playerids).
 """
 
-import datetime as dt
 from typing import Any
 
 from sqlalchemy.orm import Session
@@ -90,6 +99,62 @@ def _flatten_and_group(box_score: dict[str, Any] | list) -> dict[int, list[dict[
     return by_player
 
 
+def _extract_risp_totals(game_plays: dict[str, Any], ps_id_by_source: dict[int, int]) -> dict[int, dict[str, int]]:
+    """Returns {player_season_id: {"risp_ab": n, "risp_h": n}} — an at-bat
+    counts as RISP if a runner occupied 2nd or 3rd *before* the play. Plays
+    that aren't an official at-bat (walks, HBP, sac plays: ab != 1) don't
+    count, matching the standard AVG definition."""
+    totals: dict[int, dict[str, int]] = {}
+    if not isinstance(game_plays, dict):
+        return totals
+    for halves in game_plays.values():
+        if not isinstance(halves, dict):
+            continue
+        for plays in halves.values():
+            if not isinstance(plays, list):
+                continue
+            for play in plays:
+                if play.get("ab") != 1:
+                    continue
+                if not (play.get("runner2") or play.get("runner3")):
+                    continue
+                ps_id = ps_id_by_source.get(play.get("batterid"))
+                if ps_id is None:
+                    continue
+                entry = totals.setdefault(ps_id, {"risp_ab": 0, "risp_h": 0})
+                entry["risp_ab"] += 1
+                entry["risp_h"] += int(play.get("h") or 0)
+    return totals
+
+
+def _extract_lob(game_plays: dict[str, Any]) -> tuple[int | None, int | None]:
+    """Returns (home_lob, away_lob): for each half-inning, runners left on
+    base are read off the *last* play's after-state (top of the inning is
+    always the away team batting, bottom always home — a structural rule,
+    not dependent on the per-play `home` flag). None if no play-by-play was
+    available for this game at all."""
+    if not isinstance(game_plays, dict) or not game_plays:
+        return None, None
+
+    home_lob = 0
+    away_lob = 0
+    found_any = False
+    for halves in game_plays.values():
+        if not isinstance(halves, dict):
+            continue
+        for half_name, plays in halves.items():
+            if not isinstance(plays, list) or not plays:
+                continue
+            last = plays[-1]
+            left = sum(1 for f in ("runner1after", "runner2after", "runner3after") if last.get(f))
+            found_any = True
+            if half_name == "bottom":
+                home_lob += left
+            elif half_name == "top":
+                away_lob += left
+    return (home_lob, away_lob) if found_any else (None, None)
+
+
 def scrape_boxscore(
     league_code: str,
     year: int,
@@ -111,6 +176,7 @@ def scrape_boxscore(
     )
     original = data["props"]["viewData"]["original"]
     box_score = original["boxScore"]
+    game_plays = (original.get("gamePlays") or {}).get("all") or {}
 
     game = session.query(Game).filter_by(source_id=game_source_id).one()
     team_season_by_source_id = {
@@ -122,6 +188,15 @@ def scrape_boxscore(
 
     by_player = _flatten_and_group(box_score)
 
+    # Pass 1: upsert Player/PlayerSeason for everyone who appears, so RISP
+    # totals (keyed by player_season_id) can be computed before the single
+    # BattingGameLine upsert per player below — folding risp_ab/risp_h into
+    # that same upsert call avoids a second upsert on the same row, which
+    # would silently zero out the fields the first call didn't set (see
+    # db/upsert.py: ON CONFLICT DO UPDATE sets every column from `values`,
+    # falling back to each column's default for anything omitted).
+    player_season_id_by_player: dict[int, int] = {}
+    team_season_id_by_player: dict[int, int] = {}
     for source_player_id, records in by_player.items():
         last = records[-1]
         player_info = last.get("player") or {}
@@ -167,6 +242,22 @@ def scrape_boxscore(
             },
             ["player_id", "team_season_id"],
         )
+        player_season_id_by_player[source_player_id] = player_season_id
+        team_season_id_by_player[source_player_id] = team_season_id
+
+    risp_totals = _extract_risp_totals(game_plays, player_season_id_by_player)
+    home_lob, away_lob = _extract_lob(game_plays)
+    game.home_lob = home_lob
+    game.away_lob = away_lob
+
+    # Pass 2: sum each player's per-record fields and upsert one
+    # batting_game_lines / pitching_game_lines row per player.
+    for source_player_id, records in by_player.items():
+        player_season_id = player_season_id_by_player.get(source_player_id)
+        team_season_id = team_season_id_by_player.get(source_player_id)
+        if player_season_id is None or team_season_id is None:
+            continue
+        last = records[-1]
 
         batting_totals = {model_field: 0 for model_field in _BATTING_SUM_FIELDS.values()}
         pitching_totals = {model_field: 0 for model_field in _PITCHING_SUM_FIELDS.values()}
@@ -184,6 +275,7 @@ def scrape_boxscore(
             pitch_save = pitch_save or bool(rec.get("pitch_save"))
 
         if batting_totals["pa"] > 0 or batting_totals["ab"] > 0:
+            risp = risp_totals.get(player_season_id, {"risp_ab": 0, "risp_h": 0})
             upsert(
                 session,
                 BattingGameLine,
@@ -193,6 +285,7 @@ def scrape_boxscore(
                     "team_season_id": team_season_id,
                     "position": last.get("pos"),
                     **batting_totals,
+                    **risp,
                 },
                 ["game_id", "player_season_id"],
             )
