@@ -8,6 +8,7 @@ import streamlit as st
 from app.components.charts import trend_chart
 from app.components.data_access import team_history
 from app.components.filters import team_multiselect
+from app.components.formatting import PCT_COLUMN_CONFIG
 
 st.set_page_config(page_title="Team Comparison", page_icon="📈", layout="wide")
 st.title("Team Comparison")
@@ -27,7 +28,7 @@ st.dataframe(
     df,
     hide_index=True,
     use_container_width=True,
-    column_config={"pct": st.column_config.NumberColumn(format="%.3f")},
+    column_config=PCT_COLUMN_CONFIG,
 )
 
 st.plotly_chart(trend_chart(df, "year", "pct", color_col="team"), use_container_width=True)

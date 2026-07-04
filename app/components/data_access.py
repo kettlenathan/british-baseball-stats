@@ -199,6 +199,8 @@ def _batting_career_rows(session, names: list[str]) -> list[dict]:
             Player.full_name,
             BattingSeasonStats,
             BattingWar.war,
+            BattingWar.woba,
+            LeagueSeasonContext.lg_woba,
         )
         .join(PlayerSeason, PlayerSeason.id == BattingSeasonStats.player_season_id)
         .join(Player, Player.id == PlayerSeason.player_id)
@@ -207,12 +209,13 @@ def _batting_career_rows(session, names: list[str]) -> list[dict]:
         .join(League, League.id == LeagueSeason.league_id)
         .join(Season, Season.id == LeagueSeason.season_id)
         .outerjoin(BattingWar, BattingWar.player_season_id == BattingSeasonStats.player_season_id)
+        .outerjoin(LeagueSeasonContext, LeagueSeasonContext.league_season_id == TeamSeason.league_season_id)
         .where(Player.full_name.in_(names))
         .order_by(Player.full_name, Season.year)
     ).all()
 
     records = []
-    for year, league_code, team_name, full_name, stats_row, war in rows:
+    for year, league_code, team_name, full_name, stats_row, war, player_woba, lg_woba in rows:
         rate = batting_rate_stats(stats_row)
         records.append(
             {
@@ -223,6 +226,8 @@ def _batting_career_rows(session, names: list[str]) -> list[dict]:
                 "pa": stats_row.pa,
                 "hr": stats_row.hr,
                 **rate,
+                "woba": player_woba,
+                "wrc_plus": wrc_plus(player_woba, lg_woba),
                 "war": war,
             }
         )
@@ -239,6 +244,7 @@ def _pitching_career_rows(session, names: list[str]) -> list[dict]:
             PitchingSeasonStats,
             PitchingWar.war,
             PitchingWar.fip,
+            LeagueSeasonContext.lg_era,
         )
         .join(PlayerSeason, PlayerSeason.id == PitchingSeasonStats.player_season_id)
         .join(Player, Player.id == PlayerSeason.player_id)
@@ -247,12 +253,13 @@ def _pitching_career_rows(session, names: list[str]) -> list[dict]:
         .join(League, League.id == LeagueSeason.league_id)
         .join(Season, Season.id == LeagueSeason.season_id)
         .outerjoin(PitchingWar, PitchingWar.player_season_id == PitchingSeasonStats.player_season_id)
+        .outerjoin(LeagueSeasonContext, LeagueSeasonContext.league_season_id == TeamSeason.league_season_id)
         .where(Player.full_name.in_(names))
         .order_by(Player.full_name, Season.year)
     ).all()
 
     records = []
-    for year, league_code, team_name, full_name, stats_row, war, player_fip in rows:
+    for year, league_code, team_name, full_name, stats_row, war, player_fip, lg_era in rows:
         rate = pitching_rate_stats(stats_row)
         records.append(
             {
@@ -266,6 +273,7 @@ def _pitching_career_rows(session, names: list[str]) -> list[dict]:
                 "so": stats_row.so,
                 **rate,
                 "fip": player_fip,
+                "era_plus": era_plus(rate["era"], lg_era),
                 "war": war,
             }
         )
@@ -273,10 +281,20 @@ def _pitching_career_rows(session, names: list[str]) -> list[dict]:
 
 
 @st.cache_data
-def player_career(full_name: str) -> pd.DataFrame:
+def player_batting_career(full_name: str) -> pd.DataFrame:
     session = get_session()
     try:
         df = pd.DataFrame(_batting_career_rows(session, [full_name]))
+        return df.drop(columns=["player"]) if not df.empty else df
+    finally:
+        session.close()
+
+
+@st.cache_data
+def player_pitching_career(full_name: str) -> pd.DataFrame:
+    session = get_session()
+    try:
+        df = pd.DataFrame(_pitching_career_rows(session, [full_name]))
         return df.drop(columns=["player"]) if not df.empty else df
     finally:
         session.close()
