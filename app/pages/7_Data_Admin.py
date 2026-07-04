@@ -8,16 +8,10 @@ import pandas as pd
 import streamlit as st
 from sqlalchemy import select
 
+from app.env import is_deployed
 from db.engine import get_session
 from db.models import ScrapeLog
 from scraper.discovery import SENIOR_LEAGUE_CODES
-
-def is_deployed() -> bool:
-    try:
-        return bool(st.secrets.get("IS_DEPLOYED", False))
-    except Exception:
-        return False
-
 
 st.set_page_config(page_title="Data Admin", page_icon="🛠️", layout="wide")
 st.title("Data Admin")
