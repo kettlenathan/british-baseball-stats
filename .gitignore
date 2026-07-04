@@ -1,7 +1,11 @@
 .venv/
 __pycache__/
 *.pyc
-data/
+data/*
+!data/stats.db
+data/raw_cache/
+data/*.db-wal
+data/*.db-shm
 .ruff_cache/
 .pytest_cache/
 scraper/recon/output/

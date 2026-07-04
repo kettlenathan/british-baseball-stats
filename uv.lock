@@ -78,11 +78,15 @@ dependencies = [
     { name = "alembic" },
     { name = "httpx" },
     { name = "pandas" },
-    { name = "playwright" },
     { name = "plotly" },
     { name = "sqlalchemy" },
     { name = "streamlit" },
     { name = "tenacity" },
+]
+
+[package.optional-dependencies]
+recon = [
+    { name = "playwright" },
 ]
 
 [package.dev-dependencies]
@@ -96,12 +100,13 @@ requires-dist = [
     { name = "alembic", specifier = ">=1.18.5" },
     { name = "httpx", specifier = ">=0.28.1" },
     { name = "pandas", specifier = ">=3.0.3" },
-    { name = "playwright", specifier = ">=1.61.0" },
+    { name = "playwright", marker = "extra == 'recon'", specifier = ">=1.61.0" },
     { name = "plotly", specifier = ">=6.8.0" },
     { name = "sqlalchemy", specifier = ">=2.0.51" },
     { name = "streamlit", specifier = ">=1.58.0" },
     { name = "tenacity", specifier = ">=9.1.4" },
 ]
+provides-extras = ["recon"]
 
 [package.metadata.requires-dev]
 dev = [
