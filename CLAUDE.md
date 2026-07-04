@@ -42,7 +42,14 @@ writes back upstream.
 
 ### `scraper/`
 - `discovery.py` — finds which years a competition (`league_code`, e.g. `nbl`) has data for,
-  via each competition's `/editions` page.
+  via each competition's `/editions` page. Also holds `resolve_fetch_code(canonical_code,
+  year)`: two of today's codes were renamed for 2026 (`d2` was `aaa`, `d3` was `aa` through
+  2025 — confirmed against cached `/editions` responses), so the canonical `League.code`
+  stored in the DB can differ from the code actually used to build the URL for older years.
+  `d4`/`d5` are deliberately **not** mapped — `d4`'s historical `/editions` page mixes in
+  unrelated regional competitions, and `d5` has no pre-2026 history. `scrape_schedule.py` and
+  `scrape_boxscores.py` both call this to build their fetch URL while persisting under the
+  canonical code.
 - `scrape_schedule.py` — one fetch of a competition-year's `schedule-and-results` page yields
   the full season's games in one response (no pagination) — populates
   League/Season/LeagueSeason/Team/TeamSeason/Game.
@@ -121,8 +128,39 @@ writes back upstream.
   sabermetric formulas are never reimplemented or recomputed here, only read and formatted
   (e.g. `wrc_plus`/`era_plus` are computed inline from already-stored `woba`/`era` plus the
   league context row, but the underlying rate stats come from `stats/rate_stats.py`).
-- `app/pages/5_Data_Admin.py` runs the scraper/recompute pipeline as a subprocess from the
+- `app/pages/5_Player_Comparison.py` and `app/pages/6_Team_Comparison.py` let a user pick
+  2+ players or 1+ teams (via `filters.py`'s `player_multiselect`/`team_multiselect`) and see
+  them side by side — batting and pitching career tables/trend charts for players, a
+  win-pct-by-year trend for teams. Both reuse `charts.py`'s `trend_chart(..., color_col=...)`
+  for the single-vs-multi-series overlay rather than branching in the page.
+- `app/pages/7_Data_Admin.py` runs the scraper/recompute pipeline as a subprocess from the
   UI and shows recent `ScrapeLog` activity.
+
+## Data refresh cadence
+
+Refresh is **manual only, no scheduler exists** — there is no GitHub Actions workflow, cron
+job, Windows Task Scheduler entry, or scheduling library in this repo. It's triggered exactly
+two ways, both ending at the same code path (`scraper.pipeline.run()` then
+`stats.recompute.recompute_league_season()` per touched `league_season_id`, via
+`scripts/refresh_data.py`):
+- CLI: `uv run python -m scripts.refresh_data --leagues <codes> --years <spec>
+  [--force-refresh]`
+- The Data Admin page's "Run refresh" button (`app/pages/7_Data_Admin.py`), which shells out
+  to the identical command.
+
+`config.CACHE_TTL_CURRENT_SEASON_HOURS = 24` means a same-day, non-forced re-run mostly hits
+the raw-HTML cache rather than re-scraping the live site; historical seasons are cached
+~forever. `--force-refresh` bypasses this.
+
+**Recommended cadence: weekly, on Monday** (games are played Sundays). `scrape_schedule()`
+only queues box-score fetches for games already `status == "final"`, so running Sunday night
+risks missing games the site hasn't finalized yet — a Monday run reliably picks up all of
+Sunday's completed games in one pass, e.g.:
+```
+uv run python -m scripts.refresh_data --leagues nbl,d2,d3,d4,d5 --years 2026
+```
+This is documentation of the recommended process, not automation — no scheduled job runs
+this today.
 
 ## Testing
 

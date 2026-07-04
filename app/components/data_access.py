@@ -4,7 +4,7 @@ never duplicates sabermetric logic — it only displays what stats/ derived."""
 
 import pandas as pd
 import streamlit as st
-from sqlalchemy import select
+from sqlalchemy import or_, select
 
 from db.engine import get_session
 from db.models import (
@@ -190,44 +190,112 @@ def standings(league_season_id: int) -> pd.DataFrame:
         session.close()
 
 
+def _batting_career_rows(session, names: list[str]) -> list[dict]:
+    rows = session.execute(
+        select(
+            Season.year,
+            League.code,
+            TeamSeason.display_name,
+            Player.full_name,
+            BattingSeasonStats,
+            BattingWar.war,
+        )
+        .join(PlayerSeason, PlayerSeason.id == BattingSeasonStats.player_season_id)
+        .join(Player, Player.id == PlayerSeason.player_id)
+        .join(TeamSeason, TeamSeason.id == PlayerSeason.team_season_id)
+        .join(LeagueSeason, LeagueSeason.id == TeamSeason.league_season_id)
+        .join(League, League.id == LeagueSeason.league_id)
+        .join(Season, Season.id == LeagueSeason.season_id)
+        .outerjoin(BattingWar, BattingWar.player_season_id == BattingSeasonStats.player_season_id)
+        .where(Player.full_name.in_(names))
+        .order_by(Player.full_name, Season.year)
+    ).all()
+
+    records = []
+    for year, league_code, team_name, full_name, stats_row, war in rows:
+        rate = batting_rate_stats(stats_row)
+        records.append(
+            {
+                "player": full_name,
+                "year": year,
+                "league": league_code,
+                "team": team_name,
+                "pa": stats_row.pa,
+                "hr": stats_row.hr,
+                **rate,
+                "war": war,
+            }
+        )
+    return records
+
+
+def _pitching_career_rows(session, names: list[str]) -> list[dict]:
+    rows = session.execute(
+        select(
+            Season.year,
+            League.code,
+            TeamSeason.display_name,
+            Player.full_name,
+            PitchingSeasonStats,
+            PitchingWar.war,
+            PitchingWar.fip,
+        )
+        .join(PlayerSeason, PlayerSeason.id == PitchingSeasonStats.player_season_id)
+        .join(Player, Player.id == PlayerSeason.player_id)
+        .join(TeamSeason, TeamSeason.id == PlayerSeason.team_season_id)
+        .join(LeagueSeason, LeagueSeason.id == TeamSeason.league_season_id)
+        .join(League, League.id == LeagueSeason.league_id)
+        .join(Season, Season.id == LeagueSeason.season_id)
+        .outerjoin(PitchingWar, PitchingWar.player_season_id == PitchingSeasonStats.player_season_id)
+        .where(Player.full_name.in_(names))
+        .order_by(Player.full_name, Season.year)
+    ).all()
+
+    records = []
+    for year, league_code, team_name, full_name, stats_row, war, player_fip in rows:
+        rate = pitching_rate_stats(stats_row)
+        records.append(
+            {
+                "player": full_name,
+                "year": year,
+                "league": league_code,
+                "team": team_name,
+                "w": stats_row.wins,
+                "l": stats_row.losses,
+                "sv": stats_row.saves,
+                "so": stats_row.so,
+                **rate,
+                "fip": player_fip,
+                "war": war,
+            }
+        )
+    return records
+
+
 @st.cache_data
 def player_career(full_name: str) -> pd.DataFrame:
     session = get_session()
     try:
-        rows = session.execute(
-            select(
-                Season.year,
-                League.code,
-                TeamSeason.display_name,
-                BattingSeasonStats,
-                BattingWar.war,
-            )
-            .join(PlayerSeason, PlayerSeason.id == BattingSeasonStats.player_season_id)
-            .join(Player, Player.id == PlayerSeason.player_id)
-            .join(TeamSeason, TeamSeason.id == PlayerSeason.team_season_id)
-            .join(LeagueSeason, LeagueSeason.id == TeamSeason.league_season_id)
-            .join(League, League.id == LeagueSeason.league_id)
-            .join(Season, Season.id == LeagueSeason.season_id)
-            .outerjoin(BattingWar, BattingWar.player_season_id == BattingSeasonStats.player_season_id)
-            .where(Player.full_name == full_name)
-            .order_by(Season.year)
-        ).all()
+        df = pd.DataFrame(_batting_career_rows(session, [full_name]))
+        return df.drop(columns=["player"]) if not df.empty else df
+    finally:
+        session.close()
 
-        records = []
-        for year, league_code, team_name, stats_row, war in rows:
-            rate = batting_rate_stats(stats_row)
-            records.append(
-                {
-                    "year": year,
-                    "league": league_code,
-                    "team": team_name,
-                    "pa": stats_row.pa,
-                    "hr": stats_row.hr,
-                    **rate,
-                    "war": war,
-                }
-            )
-        return pd.DataFrame(records)
+
+@st.cache_data
+def player_batting_comparison(names: list[str]) -> pd.DataFrame:
+    session = get_session()
+    try:
+        return pd.DataFrame(_batting_career_rows(session, sorted(names)))
+    finally:
+        session.close()
+
+
+@st.cache_data
+def player_pitching_comparison(names: list[str]) -> pd.DataFrame:
+    session = get_session()
+    try:
+        return pd.DataFrame(_pitching_career_rows(session, sorted(names)))
     finally:
         session.close()
 
@@ -237,5 +305,74 @@ def all_player_names() -> list[str]:
     session = get_session()
     try:
         return sorted({row[0] for row in session.execute(select(Player.full_name))})
+    finally:
+        session.close()
+
+
+@st.cache_data
+def all_team_names() -> list[str]:
+    session = get_session()
+    try:
+        return sorted({row[0] for row in session.execute(select(Team.name))})
+    finally:
+        session.close()
+
+
+@st.cache_data
+def team_history(names: list[str]) -> pd.DataFrame:
+    """One row per team-per-year, aggregated across every league_season that
+    team has played in (unlike standings(), which is scoped to one
+    league_season) — W/L/T computed from Game rows the same way
+    standings() does, per team_season."""
+    session = get_session()
+    try:
+        ts_rows = session.execute(
+            select(TeamSeason.id, Team.name, Season.year, League.code)
+            .join(Team, Team.id == TeamSeason.team_id)
+            .join(LeagueSeason, LeagueSeason.id == TeamSeason.league_season_id)
+            .join(Season, Season.id == LeagueSeason.season_id)
+            .join(League, League.id == LeagueSeason.league_id)
+            .where(Team.name.in_(sorted(names)))
+        ).all()
+        if not ts_rows:
+            return pd.DataFrame()
+
+        ts_ids = [r.id for r in ts_rows]
+        games = session.execute(
+            select(Game).where(
+                Game.status == "final",
+                or_(Game.home_team_season_id.in_(ts_ids), Game.away_team_season_id.in_(ts_ids)),
+            )
+        ).scalars().all()
+
+        wlt = {r.id: {"w": 0, "l": 0, "t": 0} for r in ts_rows}
+        for g in games:
+            if g.home_score is None or g.away_score is None:
+                continue
+            for ts_id, own, opp in (
+                (g.home_team_season_id, g.home_score, g.away_score),
+                (g.away_team_season_id, g.away_score, g.home_score),
+            ):
+                if ts_id not in wlt:
+                    continue
+                key = "w" if own > opp else "l" if own < opp else "t"
+                wlt[ts_id][key] += 1
+
+        records = []
+        for r in ts_rows:
+            w, losses, t = wlt[r.id]["w"], wlt[r.id]["l"], wlt[r.id]["t"]
+            gp = w + losses + t
+            records.append(
+                {
+                    "team": r.name,
+                    "year": r.year,
+                    "league": r.code,
+                    "w": w,
+                    "l": losses,
+                    "t": t,
+                    "pct": (w / gp) if gp else None,
+                }
+            )
+        return pd.DataFrame(records).sort_values(["team", "year"])
     finally:
         session.close()

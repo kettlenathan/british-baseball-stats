@@ -20,6 +20,7 @@ from sqlalchemy.orm import Session
 from config import BASE_URL
 from db.models import BattingGameLine, Game, PitchingGameLine, Player, PlayerSeason, TeamSeason
 from db.upsert import upsert
+from scraper.discovery import resolve_fetch_code
 from scraper.http_client import fetch_inertia
 
 _NON_TEAM_KEYS = {"totals", "pitchers"}
@@ -98,7 +99,7 @@ def scrape_boxscore(
     force_refresh: bool = False,
     is_current_season: bool = True,
 ) -> None:
-    slug = f"{year}-{league_code}"
+    slug = f"{year}-{resolve_fetch_code(league_code, year)}"
     url = f"{BASE_URL}/en/events/{slug}/schedule-and-results/box-score/{game_source_id}"
     data = fetch_inertia(
         url,

@@ -18,7 +18,7 @@ def scatter_chart(df: pd.DataFrame, x: str, y: str, color_col: str | None = "tea
     return fig
 
 
-def trend_chart(df: pd.DataFrame, x: str, y: str):
-    fig = px.line(df, x=x, y=y, markers=True)
+def trend_chart(df: pd.DataFrame, x: str, y: str, color_col: str | None = None):
+    fig = px.line(df, x=x, y=y, color=color_col if color_col in df.columns else None, markers=True)
     fig.update_layout(margin=dict(l=10, r=10, t=30, b=10))
     return fig

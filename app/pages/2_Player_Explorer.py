@@ -35,6 +35,10 @@ if df.empty:
     st.info("No qualifying players for this filter.")
     st.stop()
 
+teams = sorted(df["team"].unique())
+selected_teams = st.multiselect("Teams", teams, default=teams)
+df = df[df["team"].isin(selected_teams)]
+
 numeric_cols = [c for c in numeric_cols if c in df.columns]
 col1, col2 = st.columns(2)
 x_axis = col1.selectbox("X axis", numeric_cols, index=numeric_cols.index("war") if "war" in numeric_cols else 0)

@@ -15,6 +15,7 @@ from sqlalchemy.orm import Session
 from config import BASE_URL
 from db.models import Game, League, LeagueSeason, Season, Team, TeamSeason
 from db.upsert import upsert
+from scraper.discovery import CANONICAL_DISPLAY_NAMES, resolve_fetch_code
 from scraper.http_client import fetch_inertia
 
 _SLUG_RE = re.compile(r"^(\d{4})-(.+)$")
@@ -57,7 +58,8 @@ def scrape_schedule(
     is_current_season: bool = True,
 ) -> tuple[int, list[int]]:
     """Scrape one competition-year. Returns (league_season_id, final_game_source_ids)."""
-    slug = f"{year}-{league_code}"
+    fetch_code = resolve_fetch_code(league_code, year)
+    slug = f"{year}-{fetch_code}"
     url = f"{BASE_URL}/en/events/{slug}/schedule-and-results"
     data = fetch_inertia(
         url,
@@ -75,7 +77,12 @@ def scrape_schedule(
         League,
         {
             "code": league_code,
-            "name": league_name or tournament.get("tournamentname") or league_code,
+            "name": (
+                league_name
+                or CANONICAL_DISPLAY_NAMES.get(league_code)
+                or tournament.get("tournamentname")
+                or league_code
+            ),
             "tier": "senior" if is_senior else None,
             "is_senior": is_senior,
             "notes": None,
@@ -85,7 +92,7 @@ def scrape_schedule(
     season_id = upsert(session, Season, {"year": year}, ["year"])
 
     tourn_year, tourn_code = _parse_slug(tournament["tournamentkey"])
-    if tourn_year != year or tourn_code != league_code:
+    if tourn_year != year or tourn_code != fetch_code:
         raise ValueError(
             f"Requested {slug} but site returned tournament for {tournament['tournamentkey']}"
         )
