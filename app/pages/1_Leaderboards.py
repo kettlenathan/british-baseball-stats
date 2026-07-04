@@ -7,6 +7,7 @@ import streamlit as st
 
 from app.components.data_access import batting_leaderboard, pitching_leaderboard, standings
 from app.components.filters import league_season_selector
+from app.components.formatting import BATTING_COLUMN_CONFIG, PCT_COLUMN_CONFIG, PITCHING_COLUMN_CONFIG
 from stats.war import WAR_DISCLAIMER
 
 st.set_page_config(page_title="Leaderboards", page_icon="⚾", layout="wide")
@@ -28,18 +29,7 @@ with tab_batting:
             df.sort_values("war", ascending=False),
             hide_index=True,
             use_container_width=True,
-            column_config={
-                "avg": st.column_config.NumberColumn(format="%.3f"),
-                "obp": st.column_config.NumberColumn(format="%.3f"),
-                "slg": st.column_config.NumberColumn(format="%.3f"),
-                "ops": st.column_config.NumberColumn(format="%.3f"),
-                "iso": st.column_config.NumberColumn(format="%.3f"),
-                "woba": st.column_config.NumberColumn(format="%.3f"),
-                "wrc_plus": st.column_config.NumberColumn("wRC+", format="%.0f"),
-                "war": st.column_config.NumberColumn("WAR", format="%.2f"),
-                "bb_pct": st.column_config.NumberColumn("BB%", format="%.1%"),
-                "k_pct": st.column_config.NumberColumn("K%", format="%.1%"),
-            },
+            column_config=BATTING_COLUMN_CONFIG,
         )
         st.caption(WAR_DISCLAIMER)
 
@@ -53,16 +43,7 @@ with tab_pitching:
             df.sort_values("war", ascending=False),
             hide_index=True,
             use_container_width=True,
-            column_config={
-                "era": st.column_config.NumberColumn(format="%.2f"),
-                "whip": st.column_config.NumberColumn(format="%.2f"),
-                "k9": st.column_config.NumberColumn("K/9", format="%.1f"),
-                "bb9": st.column_config.NumberColumn("BB/9", format="%.1f"),
-                "fip": st.column_config.NumberColumn(format="%.2f"),
-                "era_plus": st.column_config.NumberColumn("ERA+", format="%.0f"),
-                "war": st.column_config.NumberColumn("WAR", format="%.2f"),
-                "ip": st.column_config.NumberColumn("IP", format="%.1f"),
-            },
+            column_config=PITCHING_COLUMN_CONFIG,
         )
         st.caption(WAR_DISCLAIMER)
 
@@ -75,5 +56,5 @@ with tab_standings:
             df,
             hide_index=True,
             use_container_width=True,
-            column_config={"pct": st.column_config.NumberColumn(format="%.3f")},
+            column_config=PCT_COLUMN_CONFIG,
         )

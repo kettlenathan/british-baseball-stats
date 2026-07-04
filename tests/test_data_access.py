@@ -23,7 +23,8 @@ def _patch_get_session(session, monkeypatch):
     monkeypatch.setattr(session, "close", lambda: None)
     yield
     for fn in (
-        data_access.player_career,
+        data_access.player_batting_career,
+        data_access.player_pitching_career,
         data_access.player_batting_comparison,
         data_access.player_pitching_comparison,
         data_access.team_history,

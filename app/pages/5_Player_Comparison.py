@@ -8,6 +8,7 @@ import streamlit as st
 from app.components.charts import trend_chart
 from app.components.data_access import player_batting_comparison, player_pitching_comparison
 from app.components.filters import player_multiselect
+from app.components.formatting import BATTING_COLUMN_CONFIG, PITCHING_COLUMN_CONFIG
 
 st.set_page_config(page_title="Player Comparison", page_icon="🆚", layout="wide")
 st.title("Player Comparison")
@@ -27,13 +28,7 @@ else:
         bat_df,
         hide_index=True,
         use_container_width=True,
-        column_config={
-            "avg": st.column_config.NumberColumn(format="%.3f"),
-            "obp": st.column_config.NumberColumn(format="%.3f"),
-            "slg": st.column_config.NumberColumn(format="%.3f"),
-            "ops": st.column_config.NumberColumn(format="%.3f"),
-            "war": st.column_config.NumberColumn("WAR", format="%.2f"),
-        },
+        column_config=BATTING_COLUMN_CONFIG,
     )
     col1, col2 = st.columns(2)
     with col1:
@@ -52,13 +47,7 @@ else:
         pitch_df,
         hide_index=True,
         use_container_width=True,
-        column_config={
-            "era": st.column_config.NumberColumn(format="%.2f"),
-            "whip": st.column_config.NumberColumn(format="%.2f"),
-            "fip": st.column_config.NumberColumn(format="%.2f"),
-            "war": st.column_config.NumberColumn("WAR", format="%.2f"),
-            "ip": st.column_config.NumberColumn("IP", format="%.1f"),
-        },
+        column_config=PITCHING_COLUMN_CONFIG,
     )
     col1, col2 = st.columns(2)
     with col1:

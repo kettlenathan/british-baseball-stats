@@ -7,6 +7,7 @@ import streamlit as st
 
 from app.components.data_access import batting_leaderboard, pitching_leaderboard, team_roster
 from app.components.filters import league_season_selector
+from app.components.formatting import BATTING_COLUMN_CONFIG, PITCHING_COLUMN_CONFIG
 
 st.set_page_config(page_title="Team Page", page_icon="🏟️", layout="wide")
 st.title("Team Page")
@@ -38,6 +39,7 @@ with col1:
         bat_df[bat_df["team"] == team].sort_values("pa", ascending=False),
         hide_index=True,
         use_container_width=True,
+        column_config=BATTING_COLUMN_CONFIG,
     )
 with col2:
     st.subheader("Pitching")
@@ -46,4 +48,5 @@ with col2:
         pitch_df[pitch_df["team"] == team].sort_values("ip", ascending=False),
         hide_index=True,
         use_container_width=True,
+        column_config=PITCHING_COLUMN_CONFIG,
     )

@@ -8,6 +8,7 @@ import streamlit as st
 from app.components.charts import scatter_chart
 from app.components.data_access import batting_leaderboard, pitching_leaderboard
 from app.components.filters import league_season_selector
+from app.components.formatting import BATTING_COLUMN_CONFIG, PITCHING_COLUMN_CONFIG
 
 st.set_page_config(page_title="Player Explorer", page_icon="📊", layout="wide")
 st.title("Player Explorer")
@@ -26,10 +27,12 @@ if category == "Batting":
         "pa", "ab", "h", "doubles", "triples", "hr", "rbi", "bb", "so", "sb",
         "avg", "obp", "slg", "ops", "iso", "bb_pct", "k_pct", "woba", "wrc_plus", "war",
     ]
+    column_config = BATTING_COLUMN_CONFIG
 else:
     min_ip = st.slider("Minimum IP", 0, 60, 5)
     df = pitching_leaderboard(league_season_id, min_ip=min_ip)
     numeric_cols = ["w", "l", "sv", "so", "bb", "h", "er", "ip", "era", "whip", "k9", "bb9", "fip", "era_plus", "war"]
+    column_config = PITCHING_COLUMN_CONFIG
 
 if df.empty:
     st.info("No qualifying players for this filter.")
@@ -48,4 +51,4 @@ fig = scatter_chart(df, x_axis, y_axis)
 st.plotly_chart(fig, use_container_width=True)
 
 with st.expander("Underlying data"):
-    st.dataframe(df, hide_index=True, use_container_width=True)
+    st.dataframe(df, hide_index=True, use_container_width=True, column_config=column_config)
