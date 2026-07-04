@@ -1,0 +1,21 @@
+[project]
+name = "british-baseball-stats"
+version = "0.1.0"
+description = "Add your description here"
+requires-python = ">=3.13"
+dependencies = [
+    "alembic>=1.18.5",
+    "httpx>=0.28.1",
+    "pandas>=3.0.3",
+    "playwright>=1.61.0",
+    "plotly>=6.8.0",
+    "sqlalchemy>=2.0.51",
+    "streamlit>=1.58.0",
+    "tenacity>=9.1.4",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=9.1.1",
+    "ruff>=0.15.20",
+]
