@@ -32,6 +32,15 @@ def slg(h: int, doubles: int, triples: int, hr: int, ab: int) -> float | None:
     return total_bases(h, doubles, triples, hr) / ab
 
 
+def fielding_pct(po: int, a: int, e: int) -> float | None:
+    denom = po + a + e
+    return (po + a) / denom if denom else None
+
+
+def avg_risp(risp_h: int, risp_ab: int) -> float | None:
+    return risp_h / risp_ab if risp_ab else None
+
+
 def batting_rate_stats(row: Any) -> dict[str, float | None]:
     """row: a BattingSeasonStats instance or any object/dict with the same
     field names (ab, h, doubles, triples, hr, bb, hbp, so, sf, pa)."""

@@ -173,6 +173,14 @@ class Game(Base):
     away_score: Mapped[int | None] = mapped_column(Integer, nullable=True)
     status: Mapped[str] = mapped_column(String)  # scheduled / final / postponed / cancelled
     venue: Mapped[str | None] = mapped_column(String, nullable=True)
+
+    # Runners left on base, derived from the box-score payload's `gamePlays`
+    # play-by-play feed (see scraper/recon/risp_lob_plan.md) — nullable since
+    # older games scraped before this field existed won't have it until
+    # re-processed, and some "final" games have no play-by-play at all.
+    home_lob: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    away_lob: Mapped[int | None] = mapped_column(Integer, nullable=True)
+
     scraped_at: Mapped[dt.datetime] = mapped_column(DateTime, default=_now)
 
     league_season: Mapped["LeagueSeason"] = relationship(back_populates="games")
@@ -215,6 +223,12 @@ class BattingGameLine(Base):
     field_csb: Mapped[int] = mapped_column(Integer, default=0)
     field_pb: Mapped[int] = mapped_column(Integer, default=0)
     position: Mapped[str | None] = mapped_column(String, nullable=True)
+
+    # Situational splits derived from `gamePlays` (see
+    # scraper/recon/risp_lob_plan.md) — at-bats/hits with a runner on 2nd or
+    # 3rd at the time of the plate appearance.
+    risp_ab: Mapped[int] = mapped_column(Integer, default=0)
+    risp_h: Mapped[int] = mapped_column(Integer, default=0)
 
 
 class PitchingGameLine(Base):
@@ -272,6 +286,17 @@ class BattingSeasonStats(Base):
     sb: Mapped[int] = mapped_column(Integer, default=0)
     cs: Mapped[int] = mapped_column(Integer, default=0)
     gdp: Mapped[int] = mapped_column(Integer, default=0)
+
+    # Fielding — same "display only, not used in WAR" scope as the
+    # batting_game_lines fields these are summed from (see BattingGameLine).
+    field_po: Mapped[int] = mapped_column(Integer, default=0)
+    field_a: Mapped[int] = mapped_column(Integer, default=0)
+    field_e: Mapped[int] = mapped_column(Integer, default=0)
+    field_dp: Mapped[int] = mapped_column(Integer, default=0)
+
+    # Situational splits — see BattingGameLine.risp_ab/risp_h.
+    risp_ab: Mapped[int] = mapped_column(Integer, default=0)
+    risp_h: Mapped[int] = mapped_column(Integer, default=0)
     computed_at: Mapped[dt.datetime] = mapped_column(DateTime, default=_now)
 
 
