@@ -10,6 +10,11 @@ DB_URL = f"sqlite:///{DB_PATH}"
 
 BASE_URL = "https://stats.britishbaseball.org.uk"
 
+# Repo that the Feedback page (app/pages/9_Feedback.py) files GitHub issues
+# against. Auth is a GITHUB_TOKEN secret (Community Cloud dashboard or local
+# .streamlit/secrets.toml), never committed.
+GITHUB_FEEDBACK_REPO = "kettlenathan/british-baseball-stats"
+
 # Politeness settings for the scraper — this is a small federation's server,
 # not a CDN-backed site built to withstand scraping load. Bumped up from an
 # initial 1.5s after a sustained multi-hundred-request session (several full

@@ -122,8 +122,17 @@ writes back upstream.
   should be bumped if the formula changes, since it's stored alongside each computed WAR row.
 
 ### `app/`
-- Streamlit multipage app; `app/Home.py` is the entry point, `app/pages/N_*.py` are the
-  numbered pages (Streamlit orders pages by the filename prefix).
+- Streamlit multipage app; `app/Home.py` is the entry point, but page registration/order/
+  visibility is explicit via `st.navigation()` in `Home.py` — not inferred from the
+  `app/pages/N_*.py` filename prefixes (those numbers are just for humans browsing the
+  directory; Streamlit no longer auto-discovers pages since the switch to `st.navigation`).
+  Home's own dashboard content lives in a `render_home()` function passed to `st.Page()`
+  alongside the rest, rather than as top-level script code.
+- `app/env.py` holds `is_deployed()`, the one shared signal for "running on the hosted
+  Community Cloud deployment vs. locally" — reads an `IS_DEPLOYED` secret that's only ever
+  set via the Community Cloud dashboard, never committed. `Home.py` uses it to decide whether
+  to include the Data Admin page in navigation at all; `7_Data_Admin.py` also checks it
+  directly as defense in depth.
 - `app/components/data_access.py` holds all `@st.cache_data`-wrapped DB-query functions
   returning pandas DataFrames. This layer only *displays* what `stats/` already derived —
   sabermetric formulas are never reimplemented or recomputed here, only read and formatted
@@ -135,7 +144,16 @@ writes back upstream.
   win-pct-by-year trend for teams. Both reuse `charts.py`'s `trend_chart(..., color_col=...)`
   for the single-vs-multi-series overlay rather than branching in the page.
 - `app/pages/7_Data_Admin.py` runs the scraper/recompute pipeline as a subprocess from the
-  UI and shows recent `ScrapeLog` activity.
+  UI and shows recent `ScrapeLog` activity. Only reachable at all when `is_deployed()` is
+  False (see above); its own live-refresh controls are additionally gated the same way.
+- `app/pages/8_Methodology.py` documents the wOBA/wRC+/FIP/ERA+/WAR formulas and what's
+  fixed (published linear weight coefficients, `stats/constants.py`) vs. self-calibrated per
+  league-season (`stats/league_context.py`) — keep it in sync if either module's approach
+  changes.
+- `app/pages/9_Feedback.py` files a GitHub issue against `config.GITHUB_FEEDBACK_REPO` via
+  the REST API, authenticated with a `GITHUB_TOKEN` secret (Community Cloud dashboard or a
+  local `.streamlit/secrets.toml` for testing — never committed). Degrades to an explanatory
+  message if the secret isn't configured, rather than failing.
 
 ## Data refresh cadence
 
@@ -193,8 +211,19 @@ it locally) precisely so the default export above — and the deployed install �
 it's only used by the one-off spike in `scraper/recon/`, not the runtime pipeline or app.
 
 The `IS_DEPLOYED` flag is set as a secret in the Community Cloud dashboard (never committed);
-`app/pages/7_Data_Admin.py` reads it via `st.secrets.get("IS_DEPLOYED", False)` to hide the
-live-refresh controls while leaving the ScrapeLog history view visible everywhere.
+`app/env.py:is_deployed()` reads it to both drop the Data Admin page from navigation entirely
+and (as defense in depth) gate its live-refresh controls if reached directly.
+
+The Feedback page (`app/pages/9_Feedback.py`) needs a `GITHUB_TOKEN` secret (a PAT or
+fine-grained token with Issues: write access on `config.GITHUB_FEEDBACK_REPO`) to file
+submissions as GitHub issues — without it, the page shows a "not configured" message instead
+of failing. Deliberately doesn't write feedback to `data/stats.db`: local file writes aren't
+reliably persistent on Community Cloud (a reboot or redeploy can silently drop them), so
+anything that needs to survive is sent to GitHub instead.
+
+**Usage tracking** uses Community Cloud's own built-in analytics (viewer/visit counts, in the
+app's dashboard under "Analytics") rather than anything built into the app — no in-app
+tracking code exists or is needed for basic usage numbers.
 
 ## Testing
 
