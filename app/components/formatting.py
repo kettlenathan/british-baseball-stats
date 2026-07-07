@@ -1,47 +1,68 @@
 """Shared st.column_config formatting for stat tables, so every page that
-displays batting/pitching/win-pct stats rounds them the same way. Keys not
-present in a given DataFrame are simply ignored by st.dataframe, so these
-dicts can be passed in full regardless of which stat columns a page has."""
+displays batting/pitching/win-pct stats rounds them the same way, and every
+column header shows its properly-cased label (theme.stat_label is the one
+source of truth for that — never a second hardcoded string here) rather
+than a raw lowercase DataFrame column name. Keys not present in a given
+DataFrame are simply ignored by st.dataframe, so these dicts can be passed
+in full regardless of which stat columns a page has."""
 
 import streamlit as st
 
-BATTING_COLUMN_CONFIG = {
-    "avg": st.column_config.NumberColumn(format="%.3f"),
-    "obp": st.column_config.NumberColumn(format="%.3f"),
-    "slg": st.column_config.NumberColumn(format="%.3f"),
-    "ops": st.column_config.NumberColumn(format="%.3f"),
-    "iso": st.column_config.NumberColumn(format="%.3f"),
-    "woba": st.column_config.NumberColumn(format="%.3f"),
-    "wrc_plus": st.column_config.NumberColumn("wRC+", format="%.0f"),
-    "war": st.column_config.NumberColumn("WAR", format="%.2f"),
-    "bb_pct": st.column_config.NumberColumn("BB%", format="percent"),
-    "k_pct": st.column_config.NumberColumn("K%", format="percent"),
-    "po": st.column_config.NumberColumn("PO", format="%d"),
-    "a": st.column_config.NumberColumn("A", format="%d"),
-    "e": st.column_config.NumberColumn("E", format="%d"),
-    "dp": st.column_config.NumberColumn("DP", format="%d"),
-    "fpct": st.column_config.NumberColumn("FPCT", format="%.3f"),
-    "avg_risp": st.column_config.NumberColumn("AVG w/RISP", format="%.3f"),
+from app.components.theme import stat_label
+
+_TEXT_COLS = ["player", "team", "league", "opponent", "position", "home_away", "result", "score"]
+_DATE_COLS = ["game_date"]
+_FORMATTED_COLS = {
+    "avg": "%.3f", "obp": "%.3f", "slg": "%.3f", "ops": "%.3f", "iso": "%.3f", "woba": "%.3f",
+    "wrc_plus": "%.0f", "war": "%.2f", "bb_pct": "percent", "k_pct": "percent",
+    "era": "%.2f", "whip": "%.2f", "k9": "%.1f", "bb9": "%.1f", "fip": "%.2f",
+    "era_plus": "%.0f", "ip": "%.1f", "fpct": "%.3f", "avg_risp": "%.3f",
+    "fps_pct": "percent", "pct": "%.3f", "r_pg": "%.2f", "ra_pg": "%.2f", "lob_pg": "%.2f",
 }
 
-PITCHING_COLUMN_CONFIG = {
-    "era": st.column_config.NumberColumn(format="%.2f"),
-    "whip": st.column_config.NumberColumn(format="%.2f"),
-    "k9": st.column_config.NumberColumn("K/9", format="%.1f"),
-    "bb9": st.column_config.NumberColumn("BB/9", format="%.1f"),
-    "fip": st.column_config.NumberColumn(format="%.2f"),
-    "era_plus": st.column_config.NumberColumn("ERA+", format="%.0f"),
-    "war": st.column_config.NumberColumn("WAR", format="%.2f"),
-    "ip": st.column_config.NumberColumn("IP", format="%.1f"),
-}
 
-PCT_COLUMN_CONFIG = {
-    "pct": st.column_config.NumberColumn(format="%.3f"),
-}
+def _build(cols: list[str]) -> dict:
+    config = {}
+    for col in cols:
+        label = stat_label(col)
+        if col in _FORMATTED_COLS:
+            config[col] = st.column_config.NumberColumn(label, format=_FORMATTED_COLS[col])
+        elif col in _TEXT_COLS:
+            config[col] = st.column_config.TextColumn(label)
+        elif col in _DATE_COLS:
+            config[col] = st.column_config.DateColumn(label, format="D MMM YYYY")
+        else:
+            config[col] = st.column_config.NumberColumn(label, format="%d")
+    return config
 
-TEAM_COLUMN_CONFIG = {
-    "pct": st.column_config.NumberColumn("Win %", format="%.3f"),
-    "r_pg": st.column_config.NumberColumn("R/G", format="%.2f"),
-    "ra_pg": st.column_config.NumberColumn("RA/G", format="%.2f"),
-    "lob_pg": st.column_config.NumberColumn("LOB/G", format="%.2f"),
-}
+
+BATTING_COLUMN_CONFIG = _build(
+    [
+        "player", "team", "league", "year", "pa", "ab", "h", "doubles", "triples", "hr", "rbi", "bb", "so", "sb",
+        "avg", "obp", "slg", "ops", "iso", "bb_pct", "k_pct", "woba", "wrc_plus", "war",
+        "po", "a", "e", "dp", "fpct", "avg_risp",
+    ]
+)
+
+PITCHING_COLUMN_CONFIG = _build(
+    [
+        "player", "team", "league", "year", "w", "l", "sv", "so", "bb", "h", "er", "ip",
+        "era", "whip", "k9", "bb9", "fip", "era_plus", "fps_pct", "war",
+    ]
+)
+
+PCT_COLUMN_CONFIG = _build(["team", "w", "l", "t", "pct"])
+
+TEAM_COLUMN_CONFIG = _build(
+    [
+        "team", "w", "l", "t", "pct", "r_pg", "ra_pg", "lob_pg",
+        "avg", "obp", "slg", "ops", "iso", "bb_pct", "k_pct", "woba", "wrc_plus", "fpct", "avg_risp",
+        "era", "whip", "fip", "era_plus", "war",
+    ]
+)
+
+ROSTER_COLUMN_CONFIG = _build(["player", "position", "jersey_number"])
+
+MATCHUP_COLUMN_CONFIG = _build(["opponent", "pa", "ab", "h", "doubles", "triples", "hr", "bb", "so", "hbp", "avg"])
+
+RECENT_GAMES_COLUMN_CONFIG = _build(["game_date", "opponent", "home_away", "score", "result"])

@@ -4,7 +4,7 @@ import pytest
 
 from stats.advanced_stats import era_plus, fip, wrc_plus
 from stats.advanced_stats import woba as advanced_woba
-from stats.rate_stats import batting_rate_stats, outs_to_ip, pitching_rate_stats
+from stats.rate_stats import batting_rate_stats, outs_to_ip, outs_to_ip_display, pitching_rate_stats
 
 
 def make_batter(**overrides):
@@ -55,6 +55,15 @@ def test_wrc_plus():
 def test_outs_to_ip():
     assert outs_to_ip(18) == pytest.approx(6.0)
     assert outs_to_ip(19) == pytest.approx(19 / 3)
+
+
+def test_outs_to_ip_display():
+    assert outs_to_ip_display(0) == pytest.approx(0.0)
+    assert outs_to_ip_display(1) == pytest.approx(0.1)
+    assert outs_to_ip_display(2) == pytest.approx(0.2)
+    assert outs_to_ip_display(3) == pytest.approx(1.0)
+    assert outs_to_ip_display(19) == pytest.approx(6.1)
+    assert outs_to_ip_display(29) == pytest.approx(9.2)
 
 
 def test_pitching_rate_stats_hand_computed():

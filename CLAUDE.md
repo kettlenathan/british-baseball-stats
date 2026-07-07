@@ -25,6 +25,7 @@ uv run python -m scraper.pipeline --leagues nbl --years 2026
 uv run python -m scraper.pipeline --leagues nbl,d2 --years 2024-2026 --force-refresh
 uv run python -m stats.recompute --league-season-id N   # omit flag to recompute all
 uv run python -m scripts.refresh_data --leagues nbl --years 2026   # scrape + recompute in one shot
+uv run python -m scripts.refresh_data --leagues nbl --years 2026 --last-week   # mid-season: only recent games
 
 # DB schema migrations (Alembic; models.py is the source of truth)
 uv run alembic revision --autogenerate -m "..."
@@ -44,20 +45,27 @@ writes back upstream.
 ### `scraper/`
 - `discovery.py` — finds which years a competition (`league_code`, e.g. `nbl`) has data for,
   via each competition's `/editions` page. Also holds `resolve_fetch_code(canonical_code,
-  year)`: two of today's codes were renamed for 2026 (`d2` was `aaa`, `d3` was `aa` through
-  2025 — confirmed against cached `/editions` responses), so the canonical `League.code`
-  stored in the DB can differ from the code actually used to build the URL for older years.
-  `d4`/`d5` are deliberately **not** mapped — `d4`'s historical `/editions` page mixes in
-  unrelated regional competitions, and `d5` has no pre-2026 history. `scrape_schedule.py` and
-  `scrape_boxscores.py` both call this to build their fetch URL while persisting under the
-  canonical code.
+  year)`: three of today's codes were renamed for 2026 (`d2` was `aaa`, `d3` was `aa`, `d4` was
+  `a`, all through 2025 — confirmed against cached `/editions` responses and, for `d4`/`a`,
+  cross-checked by team-name overlap against `d4`'s own 2026 roster, since hitting `d4`'s own
+  `/editions` page directly mixes in unrelated regional competitions), so the canonical
+  `League.code` stored in the DB can differ from the code actually used to build the URL for
+  older years. `d5` is deliberately **not** mapped — its `/editions` page lists only 2026, i.e.
+  no pre-2026 history exists at all. `scrape_schedule.py` and `scrape_boxscores.py` both call
+  this to build their fetch URL while persisting under the canonical code.
 - `scrape_schedule.py` — one fetch of a competition-year's `schedule-and-results` page yields
   the full season's games in one response (no pagination) — populates
   League/Season/LeagueSeason/Team/TeamSeason/Game.
 - `scrape_boxscores.py` — one fetch per *final* game. Box score records carry batting,
   pitching, and fielding fields together on the same record (two-way players have both
   non-zero); records are grouped by `playerid` and summed before upserting, since
-  substitutions produce multiple records per lineup spot for the same player.
+  substitutions produce multiple records per lineup spot for the same player. The same
+  payload's `gamePlays.all` play-by-play feed is also walked to build one `PlateAppearance`
+  row per plate appearance (batter/pitcher pair, first-pitch-strike, and batted-ball proxies)
+  — several of this league's per-pitch fields are confirmed always zero and unusable
+  (`ball`/`called`/`swing`/`foul`/`inplay`, and true `hitx`/`hity`/`exitvelo` coordinates), so
+  first-pitch-strike is derived by diffing `balls`/`strikes` counts between pitches instead of
+  reading a flag — see `_first_pitch_strike`'s docstring for the exact logic.
 - `http_client.py` — plain `httpx` GETs work for everything (no headless browser needed at
   runtime); a browser `User-Agent` header is required or CloudFront 403s. Most pages embed
   data as an Inertia.js `data-page` JSON blob, extracted via a real HTML parser (not regex,
@@ -89,10 +97,12 @@ writes back upstream.
   1. **Dimensions** — League/Season/LeagueSeason (one league's instance in one year),
      Team/TeamSeason (a team's participation in one league_season — this is what the site's
      own `teamid` actually identifies), Player/PlayerSeason.
-  2. **Facts** — Game, BattingGameLine, PitchingGameLine — written only by `scraper/`.
+  2. **Facts** — Game, BattingGameLine, PitchingGameLine, PlateAppearance — written only by
+     `scraper/`.
   3. **Derived/materialized** — BattingSeasonStats, PitchingSeasonStats,
-     LeagueSeasonContext, BattingWar, PitchingWar — written only by `stats/`, safe to drop
-     and rebuild at any time from fact rows.
+     LeagueSeasonContext, BattingWar, PitchingWar, BatterSpraySeasonStats,
+     BatterPitcherMatchup — written only by `stats/`, safe to drop and rebuild at any time
+     from fact rows.
 - Player identity: the site's `playerid` is confirmed stable platform-wide, so
   `players.source_id` uses it directly — no name-collision dedup needed. Team identity is
   *not* trusted to be stable across years (`teamid` is scoped per competition-instance), so
@@ -106,19 +116,40 @@ writes back upstream.
 
 ### `stats/`
 - `recompute.py` orchestrates the derivation pipeline in dependency order: aggregation
-  (game lines → season totals) → league context → WAR. Never touches raw fact tables; safe
-  to re-run any time after new games are scraped.
+  (game lines → season totals, including pitchers' first-pitch-strike% rollup from
+  `PlateAppearance`) → league context → batter spray tendency → batter/pitcher matchups →
+  WAR. Never touches raw fact tables; safe to re-run any time after new games are scraped.
 - `constants.py` — fixed sabermetric linear-weight coefficients (wOBA weights, FIP weights)
   from published research (Tom Tango et al.), treated as stable across run environments.
+- `advanced_stats.py` — wOBA/wRC+/FIP/ERA+ formulas themselves, combining `constants.py`
+  weights with a season stats row (wOBA, FIP) or a player rate stat plus its league-context
+  counterpart (wRC+, ERA+). wRC+/ERA+ here are simplified vs. their real definitions: no park
+  factor (fixed at neutral), since no park-factor data exists for this league.
 - `league_context.py` — the self-calibration layer: league-average wOBA/OBP/SLG/ERA/FIP, the
   FIP additive constant (solved per league-season so lgFIP == lgERA that season), and the
   runs-per-win conversion (scaled from a 10-runs=1-win reference by this league's own actual
   runs/game) are all computed from this league's own scraped data, season by season — this
-  is what makes WAR reflect this league's real run environment rather than assuming MLB's.
+  is what makes WAR reflect this league's real environment rather than assuming MLB's. Pull
+  tendency (below) deliberately does *not* follow this self-calibrated philosophy — a real
+  ballpark's foul lines don't move with the league's own batted-ball distribution.
+- `spray.py` — buckets each batter's batted balls into pull/center/oppo against **fixed**
+  thirds of the true 90-degree fair-territory fan (+/-15 degrees off dead-center is "center",
+  the outer 15-45 degrees on the batter's pull side is "pull", the same range on the other
+  side is "oppo" — mirrored by handedness, matching `app/components/charts.py`'s
+  `spray_heatmap` 9-bin fan) and labels their season tendency by whichever bucket holds a
+  plurality. No longer depends on `league_context.py` — ordering between the two doesn't
+  matter. `matchups.py` aggregates `PlateAppearance` rows into batter-vs-pitcher season
+  totals (`BatterPitcherMatchup`), no minimum-PA filter, no ordering dependency. Both feed
+  `app/pages/3_Player_Page.py`'s tendency/spray-chart/matchup sections; career values are
+  summed across these season rows at read time in `app/components/data_access.py`, not
+  stored separately.
 - `war.py` — simplified batting/pitching WAR. **It is offense-only / FIP-only: there is no
-  defensive component at all** (no batted-ball tracking data available), and no park
-  factors. `WAR_DISCLAIMER` in this module is surfaced verbatim in the UI wherever WAR is
-  shown — keep it accurate if the formula changes. `FORMULA_VERSION` in `constants.py`
+  defensive component at all.** The box-score play-by-play does carry a coarse batted-ball
+  proxy (pull direction, distance, ground/fly/line/pop type — `PlateAppearance`, used for
+  spray charts and pull tendency above) but never true field coordinates, exit velocity, or
+  fielder positioning data, so it can't support a real defensive metric; there are also no
+  park factors. `WAR_DISCLAIMER` in this module is surfaced verbatim in the UI wherever WAR
+  is shown — keep it accurate if the formula changes. `FORMULA_VERSION` in `constants.py`
   should be bumped if the formula changes, since it's stored alongside each computed WAR row.
 
 ### `app/`
@@ -138,6 +169,28 @@ writes back upstream.
   sabermetric formulas are never reimplemented or recomputed here, only read and formatted
   (e.g. `wrc_plus`/`era_plus` are computed inline from already-stored `woba`/`era` plus the
   league context row, but the underlying rate stats come from `stats/rate_stats.py`).
+- `app/components/theme.py` is the one place chart colors are decided. `CATEGORICAL` (8 hues,
+  light/dark) is the general palette; `OUTCOME_COLORS` fixes Home Run/Triple/Double/Single/Out
+  to the same colors everywhere regardless of which subset a given player's data happens to
+  include (not derived from `assign_colors`' "alphabetical among what's present" logic, which
+  would otherwise let a color shift between charts); `TEAM_PALETTE` is a separate, bespoke
+  10-hue set (color only — an earlier version also varied fill pattern/line dash/marker shape
+  per team, which read as cluttered rather than professional) that `assign_colors()` draws
+  from positionally for the `team` column, same as the general palette — deliberately *not*
+  hashed to a stable per-name color (an earlier version was), since with only a handful of
+  teams selected at once, positional assignment always hands them the most mutually-distinct
+  colors available instead of scattering across all 10 slots by name; `filters.py`'s
+  `team_multiselect` caps selection at 10 to match. `HEAT` is a dedicated red(most)/blue(least)
+  scale used only by `spray_heatmap`
+  — a deliberate exception to the usual one-hue sequential rule, per how that chart reads.
+  `STAT_LABELS`/`stat_label()` is the single source of truth for every column header and
+  chart label's display text (title-cased/proper abbreviation); `app/components/formatting.py`
+  builds its `st.column_config` dicts from it rather than hardcoding labels a second time.
+- `app/pages/4_Team_Page.py` shows one team's combined season stats (batting + pitching +
+  fielding + situational, via `data_access.team_season_stats`) and its last 3 weekends of
+  games (`data_access.team_recent_games` — "weekends" relative to that team's own most recent
+  game in the selected league_season, not real wall-clock today, since historical seasons
+  have no games near today) above the roster.
 - `app/pages/5_Player_Comparison.py` and `app/pages/6_Team_Comparison.py` let a user pick
   2+ players or 1+ teams (via `filters.py`'s `player_multiselect`/`team_multiselect`) and see
   them side by side — batting and pitching career tables/trend charts for players, a
@@ -148,8 +201,9 @@ writes back upstream.
   False (see above); its own live-refresh controls are additionally gated the same way.
 - `app/pages/8_Methodology.py` documents the wOBA/wRC+/FIP/ERA+/WAR formulas and what's
   fixed (published linear weight coefficients, `stats/constants.py`) vs. self-calibrated per
-  league-season (`stats/league_context.py`) — keep it in sync if either module's approach
-  changes.
+  league-season (`stats/league_context.py`), plus the fixed-geometry pull-tendency/spray-chart
+  approximation, the first-pitch-strike% count-diffing method, and the matchup table's
+  no-minimum-sample-size caveat — keep it in sync if any of those modules' approach changes.
 - `app/pages/9_Feedback.py` files a GitHub issue against `config.GITHUB_FEEDBACK_REPO` via
   the REST API, authenticated with a `GITHUB_TOKEN` secret (Community Cloud dashboard or a
   local `.streamlit/secrets.toml` for testing — never committed). Degrades to an explanatory
@@ -163,7 +217,7 @@ two ways, both ending at the same code path (`scraper.pipeline.run()` then
 `stats.recompute.recompute_league_season()` per touched `league_season_id`, via
 `scripts/refresh_data.py`):
 - CLI: `uv run python -m scripts.refresh_data --leagues <codes> --years <spec>
-  [--force-refresh]`
+  [--force-refresh] [--last-week | --last-month]`
 - The Data Admin page's "Run refresh" button (`app/pages/7_Data_Admin.py`), which shells out
   to the identical command.
 
@@ -171,12 +225,21 @@ two ways, both ending at the same code path (`scraper.pipeline.run()` then
 the raw-HTML cache rather than re-scraping the live site; historical seasons are cached
 ~forever. `--force-refresh` bypasses this.
 
+The schedule fetch itself is always whole-season (one cheap request, needed to detect newly
+final games), but box-score fetching — one request per final game, the actual cost driver for
+a full season — can be windowed with `--last-week`/`--last-month`: `scraper/pipeline.py`'s
+`run(..., since=...)` filters the box-score fetch list to games with `Game.game_date >= since`
+after the schedule scrape has upserted `Game` rows, instead of re-checking every final game in
+the season. Omitting both flags keeps the full-season behavior (needed once, e.g. after adding
+new derived fields, to backfill every already-scraped game — the box-score JSON responses are
+cached, so this reprocesses cached data rather than re-hitting the network).
+
 **Recommended cadence: weekly, on Monday** (games are played Sundays). `scrape_schedule()`
 only queues box-score fetches for games already `status == "final"`, so running Sunday night
 risks missing games the site hasn't finalized yet — a Monday run reliably picks up all of
 Sunday's completed games in one pass, e.g.:
 ```
-uv run python -m scripts.refresh_data --leagues nbl,d2,d3,d4,d5 --years 2026
+uv run python -m scripts.refresh_data --leagues nbl,d2,d3,d4,d5 --years 2026 --last-week
 ```
 This is documentation of the recommended process, not automation — no scheduled job runs
 this today.

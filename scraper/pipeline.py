@@ -9,7 +9,10 @@ import argparse
 import datetime as dt
 import time
 
+from sqlalchemy import select
+
 from db.engine import get_session
+from db.models import Game
 from scraper.scrape_boxscores import scrape_boxscore
 from scraper.scrape_schedule import scrape_schedule
 
@@ -37,8 +40,18 @@ def _parse_years(spec: str) -> list[int]:
     return [int(y) for y in spec.split(",")]
 
 
-def run(league_codes: list[str], years: list[int], force_refresh: bool = False) -> list[int]:
-    """Returns the league_season ids touched, for the caller to recompute stats on."""
+def run(
+    league_codes: list[str],
+    years: list[int],
+    force_refresh: bool = False,
+    since: dt.date | None = None,
+) -> list[int]:
+    """Returns the league_season ids touched, for the caller to recompute stats on.
+
+    `since`, if given, limits box-score fetching to final games on or after
+    that date — the schedule scrape itself always covers the whole season (a
+    single cheap request that must see every game to detect newly-final
+    ones); only the expensive per-game box-score loop is windowed."""
     session = get_session()
     league_season_ids = []
     failed_boxscores: list[tuple[str, int, int, bool]] = []
@@ -63,6 +76,17 @@ def run(league_codes: list[str], years: list[int], force_refresh: bool = False) 
                     continue
 
                 league_season_ids.append(league_season_id)
+                if since is not None:
+                    windowed_ids = set(
+                        session.execute(
+                            select(Game.source_id).where(
+                                Game.league_season_id == league_season_id,
+                                Game.status == "final",
+                                Game.game_date >= since,
+                            )
+                        ).scalars()
+                    )
+                    final_game_ids = [gid for gid in final_game_ids if gid in windowed_ids]
                 print(f"  {len(final_game_ids)} final games to fetch box scores for")
                 consecutive_failures = 0
                 circuit_breaker_trips = 0
@@ -122,16 +146,31 @@ def run(league_codes: list[str], years: list[int], force_refresh: bool = False) 
     return league_season_ids
 
 
+def _resolve_since(args: argparse.Namespace) -> dt.date | None:
+    if args.last_week:
+        return dt.date.today() - dt.timedelta(days=7)
+    if args.last_month:
+        return dt.date.today() - dt.timedelta(days=30)
+    return None
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--leagues", required=True, help="Comma-separated league codes, e.g. nbl,d2")
     parser.add_argument("--years", required=True, help="Single year, comma-separated list, or range like 2024-2026")
     parser.add_argument("--force-refresh", action="store_true")
+    window = parser.add_mutually_exclusive_group()
+    window.add_argument(
+        "--last-week", action="store_true", help="Only fetch box scores for games in the last 7 days"
+    )
+    window.add_argument(
+        "--last-month", action="store_true", help="Only fetch box scores for games in the last 30 days"
+    )
     args = parser.parse_args()
 
     league_codes = [c.strip() for c in args.leagues.split(",")]
     years = _parse_years(args.years)
-    run(league_codes, years, force_refresh=args.force_refresh)
+    run(league_codes, years, force_refresh=args.force_refresh, since=_resolve_since(args))
 
 
 if __name__ == "__main__":

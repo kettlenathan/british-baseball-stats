@@ -6,6 +6,7 @@ from db.models import (
     LeagueSeason,
     PitchingGameLine,
     PitchingSeasonStats,
+    PlateAppearance,
     Player,
     PlayerSeason,
     Season,
@@ -128,6 +129,44 @@ def test_aggregate_pitching_sums_across_games(session):
     assert row.so == 9
     assert row.wins == 1
     assert row.losses == 1
+
+
+def test_aggregate_pitching_rolls_up_first_pitch_strike_pct(session):
+    player_season, team_season, games = _build_fixture(session)
+
+    session.add(
+        PitchingGameLine(
+            game_id=games[0].id, player_season_id=player_season.id, team_season_id=team_season.id,
+            outs_recorded=9, bf=4,
+        )
+    )
+    session.add_all(
+        [
+            PlateAppearance(
+                source_play_id=1, game_id=games[0].id, inning=1, half="top",
+                batter_player_season_id=player_season.id, pitcher_player_season_id=player_season.id,
+                first_pitch_strike=True,
+            ),
+            PlateAppearance(
+                source_play_id=2, game_id=games[0].id, inning=1, half="top",
+                batter_player_season_id=player_season.id, pitcher_player_season_id=player_season.id,
+                first_pitch_strike=False,
+            ),
+            # Undeterminable PA — shouldn't count in either numerator or denominator.
+            PlateAppearance(
+                source_play_id=3, game_id=games[0].id, inning=1, half="top",
+                batter_player_season_id=player_season.id, pitcher_player_season_id=player_season.id,
+                first_pitch_strike=None,
+            ),
+        ]
+    )
+    session.commit()
+
+    aggregate_pitching(session)
+
+    row = session.query(PitchingSeasonStats).filter_by(player_season_id=player_season.id).one()
+    assert row.fps_pa == 2
+    assert row.fps_strikes == 1
 
 
 def test_aggregate_batting_rerun_is_idempotent(session):

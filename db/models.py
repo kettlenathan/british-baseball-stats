@@ -15,6 +15,7 @@ from sqlalchemy import (
     DateTime,
     Float,
     ForeignKey,
+    Index,
     Integer,
     String,
     UniqueConstraint,
@@ -257,6 +258,62 @@ class PitchingGameLine(Base):
     save: Mapped[bool] = mapped_column(Boolean, default=False)
 
 
+class PlateAppearance(Base):
+    """One row per completed plate appearance, parsed from the box score's
+    `gamePlays` play-by-play feed alongside RISP/LOB (see
+    scraper/scrape_boxscores.py, scraper/recon/risp_lob_plan.md). Feeds
+    batter pull/spray tendency, batter-vs-pitcher matchups, and pitcher
+    first-pitch-strike% (stats/spray.py, stats/matchups.py) — a single fact
+    table rather than three, since all three derive from the same per-PA
+    data."""
+
+    __tablename__ = "plate_appearances"
+    __table_args__ = (
+        Index("ix_plate_appearances_batter_pitcher", "batter_player_season_id", "pitcher_player_season_id"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    source_play_id: Mapped[int] = mapped_column(Integer, unique=True, index=True)
+    game_id: Mapped[int] = mapped_column(ForeignKey("games.id"), index=True)
+    inning: Mapped[int] = mapped_column(Integer)
+    half: Mapped[str] = mapped_column(String)  # "top" / "bottom"
+
+    batter_player_season_id: Mapped[int] = mapped_column(ForeignKey("player_seasons.id"), index=True)
+    # Nullable: pitcherid's resolvability against player_season_id_by_player
+    # is less thoroughly confirmed than batterid's (see scrape_boxscores.py).
+    pitcher_player_season_id: Mapped[int | None] = mapped_column(
+        ForeignKey("player_seasons.id"), index=True, nullable=True
+    )
+
+    ab: Mapped[int] = mapped_column(Integer, default=0)
+    h: Mapped[int] = mapped_column(Integer, default=0)
+    doubles: Mapped[int] = mapped_column(Integer, default=0)
+    triples: Mapped[int] = mapped_column(Integer, default=0)
+    hr: Mapped[int] = mapped_column(Integer, default=0)
+    bb: Mapped[int] = mapped_column(Integer, default=0)
+    ibb: Mapped[int] = mapped_column(Integer, default=0)
+    hbp: Mapped[int] = mapped_column(Integer, default=0)
+    so: Mapped[int] = mapped_column(Integer, default=0)
+    sf: Mapped[int] = mapped_column(Integer, default=0)
+    rbi: Mapped[int] = mapped_column(Integer, default=0)
+
+    # Derived by diffing the balls/strikes count between the first pitch and
+    # the next record in the same PA — this league's called/swing/foul/inplay
+    # flags are confirmed always-zero (dead fields), so they can't be read
+    # directly. None when undeterminable (e.g. no play-by-play for the game).
+    first_pitch_strike: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+
+    # Batted-ball proxies, populated only when this PA ended in a ball in
+    # play. This league's scorers never populate true hitx/hity/exitvelo
+    # coordinates (see CLAUDE.md's "no batted-ball tracking data" note) —
+    # hitpull (raw, absolute field direction: negative = left/third-base
+    # side, positive = right/first-base side — NOT handedness-adjusted) +
+    # hitdistance + hittype are the closest available approximation.
+    hitpull: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    hitdistance: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    hittype: Mapped[int | None] = mapped_column(Integer, nullable=True)
+
+
 # --------------------------------------------------------------------------
 # Derived / materialized stats — rebuilt by stats/, never scraped directly
 # --------------------------------------------------------------------------
@@ -320,6 +377,11 @@ class PitchingSeasonStats(Base):
     wins: Mapped[int] = mapped_column(Integer, default=0)
     losses: Mapped[int] = mapped_column(Integer, default=0)
     saves: Mapped[int] = mapped_column(Integer, default=0)
+
+    # First-pitch-strike%, derived from PlateAppearance.first_pitch_strike —
+    # see stats/aggregation.py.
+    fps_pa: Mapped[int] = mapped_column(Integer, default=0)
+    fps_strikes: Mapped[int] = mapped_column(Integer, default=0)
     computed_at: Mapped[dt.datetime] = mapped_column(DateTime, default=_now)
 
 
@@ -370,6 +432,53 @@ class PitchingWar(Base):
     fip: Mapped[float | None] = mapped_column(Float, nullable=True)
     war: Mapped[float | None] = mapped_column(Float, nullable=True)
     formula_version: Mapped[str] = mapped_column(String)
+    computed_at: Mapped[dt.datetime] = mapped_column(DateTime, default=_now)
+
+
+class BatterSpraySeasonStats(Base):
+    """Season-level pull/center/oppo tendency for one batter, bucketed
+    against fixed thirds of the true 90-degree fair-territory fan (see
+    stats/spray.py). Switch hitters (Player.bats == "S") are excluded — no
+    per-PA batting-side data exists to know which side they actually hit
+    from, so no row is written for them; career tendency is summed across
+    these rows at read time (app/components/data_access.py), not stored
+    separately."""
+
+    __tablename__ = "batter_spray_season_stats"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    player_season_id: Mapped[int] = mapped_column(
+        ForeignKey("player_seasons.id"), unique=True, index=True
+    )
+    pull_count: Mapped[int] = mapped_column(Integer, default=0)
+    center_count: Mapped[int] = mapped_column(Integer, default=0)
+    oppo_count: Mapped[int] = mapped_column(Integer, default=0)
+    tendency_label: Mapped[str | None] = mapped_column(String, nullable=True)
+    computed_at: Mapped[dt.datetime] = mapped_column(DateTime, default=_now)
+
+
+class BatterPitcherMatchup(Base):
+    """Aggregated plate-appearance results for one batter/pitcher pair within
+    one league_season — see stats/matchups.py. No minimum-PA filter is
+    applied here (rows with a single PA are stored same as any other); career
+    totals are summed across these rows at read time
+    (app/components/data_access.py), not stored separately."""
+
+    __tablename__ = "batter_pitcher_matchups"
+    __table_args__ = (UniqueConstraint("batter_player_season_id", "pitcher_player_season_id"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    batter_player_season_id: Mapped[int] = mapped_column(ForeignKey("player_seasons.id"), index=True)
+    pitcher_player_season_id: Mapped[int] = mapped_column(ForeignKey("player_seasons.id"), index=True)
+    pa: Mapped[int] = mapped_column(Integer, default=0)
+    ab: Mapped[int] = mapped_column(Integer, default=0)
+    h: Mapped[int] = mapped_column(Integer, default=0)
+    doubles: Mapped[int] = mapped_column(Integer, default=0)
+    triples: Mapped[int] = mapped_column(Integer, default=0)
+    hr: Mapped[int] = mapped_column(Integer, default=0)
+    bb: Mapped[int] = mapped_column(Integer, default=0)
+    so: Mapped[int] = mapped_column(Integer, default=0)
+    hbp: Mapped[int] = mapped_column(Integer, default=0)
     computed_at: Mapped[dt.datetime] = mapped_column(DateTime, default=_now)
 
 
