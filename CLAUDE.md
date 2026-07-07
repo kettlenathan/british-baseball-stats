@@ -117,9 +117,8 @@ writes back upstream.
 ### `stats/`
 - `recompute.py` orchestrates the derivation pipeline in dependency order: aggregation
   (game lines → season totals, including pitchers' first-pitch-strike% rollup from
-  `PlateAppearance`) → league context (including pull-tendency tertile cutoffs) → batter
-  spray tendency → batter/pitcher matchups → WAR. Never touches raw fact tables; safe to
-  re-run any time after new games are scraped.
+  `PlateAppearance`) → league context → batter spray tendency → batter/pitcher matchups →
+  WAR. Never touches raw fact tables; safe to re-run any time after new games are scraped.
 - `constants.py` — fixed sabermetric linear-weight coefficients (wOBA weights, FIP weights)
   from published research (Tom Tango et al.), treated as stable across run environments.
 - `advanced_stats.py` — wOBA/wRC+/FIP/ERA+ formulas themselves, combining `constants.py`
@@ -127,19 +126,23 @@ writes back upstream.
   counterpart (wRC+, ERA+). wRC+/ERA+ here are simplified vs. their real definitions: no park
   factor (fixed at neutral), since no park-factor data exists for this league.
 - `league_context.py` — the self-calibration layer: league-average wOBA/OBP/SLG/ERA/FIP, the
-  FIP additive constant (solved per league-season so lgFIP == lgERA that season), the
+  FIP additive constant (solved per league-season so lgFIP == lgERA that season), and the
   runs-per-win conversion (scaled from a 10-runs=1-win reference by this league's own actual
-  runs/game), and the pull-tendency tertile cutoffs (33rd/67th percentile of
-  handedness-adjusted `PlateAppearance.hitpull`, switch hitters excluded) are all computed
-  from this league's own scraped data, season by season — this is what makes WAR (and pull
-  tendency) reflect this league's real environment rather than assuming MLB's.
-- `spray.py` — buckets each batter's batted balls into pull/center/oppo against
-  `league_context.py`'s tertile cutoffs and labels their season tendency by whichever bucket
-  holds a plurality; must run after `compute_league_context`. `matchups.py` aggregates
-  `PlateAppearance` rows into batter-vs-pitcher season totals (`BatterPitcherMatchup`), no
-  minimum-PA filter, no ordering dependency. Both feed `app/pages/3_Player_Page.py`'s
-  tendency/spray-chart/matchup sections; career values are summed across these season rows
-  at read time in `app/components/data_access.py`, not stored separately.
+  runs/game) are all computed from this league's own scraped data, season by season — this
+  is what makes WAR reflect this league's real environment rather than assuming MLB's. Pull
+  tendency (below) deliberately does *not* follow this self-calibrated philosophy — a real
+  ballpark's foul lines don't move with the league's own batted-ball distribution.
+- `spray.py` — buckets each batter's batted balls into pull/center/oppo against **fixed**
+  thirds of the true 90-degree fair-territory fan (+/-15 degrees off dead-center is "center",
+  the outer 15-45 degrees on the batter's pull side is "pull", the same range on the other
+  side is "oppo" — mirrored by handedness, matching `app/components/charts.py`'s
+  `spray_heatmap` 9-bin fan) and labels their season tendency by whichever bucket holds a
+  plurality. No longer depends on `league_context.py` — ordering between the two doesn't
+  matter. `matchups.py` aggregates `PlateAppearance` rows into batter-vs-pitcher season
+  totals (`BatterPitcherMatchup`), no minimum-PA filter, no ordering dependency. Both feed
+  `app/pages/3_Player_Page.py`'s tendency/spray-chart/matchup sections; career values are
+  summed across these season rows at read time in `app/components/data_access.py`, not
+  stored separately.
 - `war.py` — simplified batting/pitching WAR. **It is offense-only / FIP-only: there is no
   defensive component at all.** The box-score play-by-play does carry a coarse batted-ball
   proxy (pull direction, distance, ground/fly/line/pop type — `PlateAppearance`, used for
@@ -166,6 +169,28 @@ writes back upstream.
   sabermetric formulas are never reimplemented or recomputed here, only read and formatted
   (e.g. `wrc_plus`/`era_plus` are computed inline from already-stored `woba`/`era` plus the
   league context row, but the underlying rate stats come from `stats/rate_stats.py`).
+- `app/components/theme.py` is the one place chart colors are decided. `CATEGORICAL` (8 hues,
+  light/dark) is the general palette; `OUTCOME_COLORS` fixes Home Run/Triple/Double/Single/Out
+  to the same colors everywhere regardless of which subset a given player's data happens to
+  include (not derived from `assign_colors`' "alphabetical among what's present" logic, which
+  would otherwise let a color shift between charts); `TEAM_PALETTE` is a separate, bespoke
+  10-hue set (color only — an earlier version also varied fill pattern/line dash/marker shape
+  per team, which read as cluttered rather than professional) that `assign_colors()` draws
+  from positionally for the `team` column, same as the general palette — deliberately *not*
+  hashed to a stable per-name color (an earlier version was), since with only a handful of
+  teams selected at once, positional assignment always hands them the most mutually-distinct
+  colors available instead of scattering across all 10 slots by name; `filters.py`'s
+  `team_multiselect` caps selection at 10 to match. `HEAT` is a dedicated red(most)/blue(least)
+  scale used only by `spray_heatmap`
+  — a deliberate exception to the usual one-hue sequential rule, per how that chart reads.
+  `STAT_LABELS`/`stat_label()` is the single source of truth for every column header and
+  chart label's display text (title-cased/proper abbreviation); `app/components/formatting.py`
+  builds its `st.column_config` dicts from it rather than hardcoding labels a second time.
+- `app/pages/4_Team_Page.py` shows one team's combined season stats (batting + pitching +
+  fielding + situational, via `data_access.team_season_stats`) and its last 3 weekends of
+  games (`data_access.team_recent_games` — "weekends" relative to that team's own most recent
+  game in the selected league_season, not real wall-clock today, since historical seasons
+  have no games near today) above the roster.
 - `app/pages/5_Player_Comparison.py` and `app/pages/6_Team_Comparison.py` let a user pick
   2+ players or 1+ teams (via `filters.py`'s `player_multiselect`/`team_multiselect`) and see
   them side by side — batting and pitching career tables/trend charts for players, a
@@ -176,9 +201,9 @@ writes back upstream.
   False (see above); its own live-refresh controls are additionally gated the same way.
 - `app/pages/8_Methodology.py` documents the wOBA/wRC+/FIP/ERA+/WAR formulas and what's
   fixed (published linear weight coefficients, `stats/constants.py`) vs. self-calibrated per
-  league-season (`stats/league_context.py`), plus the pull-tendency/spray-chart approximation,
-  the first-pitch-strike% count-diffing method, and the matchup table's no-minimum-sample-size
-  caveat — keep it in sync if any of those modules' approach changes.
+  league-season (`stats/league_context.py`), plus the fixed-geometry pull-tendency/spray-chart
+  approximation, the first-pitch-strike% count-diffing method, and the matchup table's
+  no-minimum-sample-size caveat — keep it in sync if any of those modules' approach changes.
 - `app/pages/9_Feedback.py` files a GitHub issue against `config.GITHUB_FEEDBACK_REPO` via
   the REST API, authenticated with a `GITHUB_TOKEN` secret (Community Cloud dashboard or a
   local `.streamlit/secrets.toml` for testing — never committed). Degrades to an explanatory

@@ -2,11 +2,12 @@
 pages. Reuses stats/ formulas rather than recomputing them, so the UI layer
 never duplicates sabermetric logic — it only displays what stats/ derived."""
 
+from datetime import timedelta
 from types import SimpleNamespace
 
 import pandas as pd
 import streamlit as st
-from sqlalchemy import func, or_, select
+from sqlalchemy import case, func, or_, select
 from sqlalchemy.orm import aliased
 
 from db.engine import get_session
@@ -32,6 +33,11 @@ from stats.advanced_stats import era_plus, fip, wrc_plus
 from stats.advanced_stats import woba as compute_woba
 from stats.rate_stats import avg, avg_risp, batting_rate_stats, fielding_pct, fps_pct, outs_to_ip_display, pitching_rate_stats
 
+# Tier order for every league dropdown in the app — top division to
+# bottom, not alphabetical (alphabetical would put d2 before nbl). Any
+# future/unlisted code sorts after these five rather than erroring.
+_LEAGUE_TIER_RANK = case({"nbl": 0, "d2": 1, "d3": 2, "d4": 3, "d5": 4}, value=League.code, else_=99)
+
 
 @st.cache_data
 def list_league_seasons() -> pd.DataFrame:
@@ -47,7 +53,7 @@ def list_league_seasons() -> pd.DataFrame:
             )
             .join(League, League.id == LeagueSeason.league_id)
             .join(Season, Season.id == LeagueSeason.season_id)
-            .order_by(Season.year.desc(), League.code)
+            .order_by(Season.year.desc(), _LEAGUE_TIER_RANK)
         ).all()
         return pd.DataFrame(rows, columns=["league_season_id", "league_code", "league_name", "year", "competition_slug"])
     finally:
@@ -71,7 +77,7 @@ def player_league_seasons(full_name: str) -> pd.DataFrame:
             .join(Season, Season.id == LeagueSeason.season_id)
             .join(League, League.id == LeagueSeason.league_id)
             .where(Player.full_name == full_name)
-            .order_by(Season.year.desc(), League.code)
+            .order_by(Season.year.desc(), _LEAGUE_TIER_RANK)
         ).all()
         return pd.DataFrame(rows, columns=["league_season_id", "year", "league"])
     finally:
@@ -344,6 +350,68 @@ def team_season_stats(league_season_id: int) -> pd.DataFrame:
                 }
             )
         return pd.DataFrame(records)
+    finally:
+        session.close()
+
+
+@st.cache_data
+def team_recent_games(league_season_id: int, team_name: str, weeks: int = 3) -> pd.DataFrame:
+    """One team's final games from the most recent `weeks` weeks of *that
+    team's own schedule* in this league_season — not real wall-clock
+    "today", since historical seasons have no games anywhere near today.
+    Games are played on weekends (see CLAUDE.md), so this reads as "the
+    last 3 weekends"."""
+    session = get_session()
+    try:
+        ts_id = session.execute(
+            select(TeamSeason.id).where(
+                TeamSeason.league_season_id == league_season_id, TeamSeason.display_name == team_name
+            )
+        ).scalar_one_or_none()
+        if ts_id is None:
+            return pd.DataFrame()
+
+        games = session.execute(
+            select(Game).where(
+                Game.league_season_id == league_season_id,
+                Game.status == "final",
+                or_(Game.home_team_season_id == ts_id, Game.away_team_season_id == ts_id),
+            )
+        ).scalars().all()
+        dated_games = [g for g in games if g.game_date is not None]
+        if not dated_games:
+            return pd.DataFrame()
+
+        cutoff = max(g.game_date for g in dated_games) - timedelta(weeks=weeks)
+        team_names = {
+            ts.id: ts.display_name
+            for ts in session.execute(select(TeamSeason).where(TeamSeason.league_season_id == league_season_id)).scalars()
+        }
+
+        records = []
+        for g in dated_games:
+            if g.game_date < cutoff:
+                continue
+            is_home = g.home_team_season_id == ts_id
+            own_score = g.home_score if is_home else g.away_score
+            opp_score = g.away_score if is_home else g.home_score
+            opponent = team_names.get(g.away_team_season_id if is_home else g.home_team_season_id, "?")
+            if own_score is None or opp_score is None:
+                result, score = None, "-"
+            else:
+                result = "W" if own_score > opp_score else ("L" if own_score < opp_score else "T")
+                score = f"{own_score}-{opp_score}"
+            records.append(
+                {
+                    "game_date": g.game_date,
+                    "opponent": opponent,
+                    "home_away": "Home" if is_home else "Away",
+                    "score": score,
+                    "result": result,
+                }
+            )
+        df = pd.DataFrame(records)
+        return df.sort_values("game_date", ascending=False) if not df.empty else df
     finally:
         session.close()
 

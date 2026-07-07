@@ -17,7 +17,7 @@ from app.components.data_access import (
     player_league_seasons,
     player_pitching_career,
 )
-from app.components.formatting import BATTING_COLUMN_CONFIG, PITCHING_COLUMN_CONFIG
+from app.components.formatting import BATTING_COLUMN_CONFIG, MATCHUP_COLUMN_CONFIG, PITCHING_COLUMN_CONFIG
 
 st.set_page_config(page_title="Player Page", page_icon="🧑‍💼", layout="wide")
 st.title("Player Page")
@@ -103,7 +103,7 @@ if not bat_df.empty:
         if matchup_df.empty:
             st.info("No matchup data available.")
         else:
-            st.dataframe(matchup_df, hide_index=True, use_container_width=True)
+            st.dataframe(matchup_df, hide_index=True, use_container_width=True, column_config=MATCHUP_COLUMN_CONFIG)
 
 if not pitch_df.empty:
     st.subheader(f"{player} — career pitching")
@@ -145,4 +145,4 @@ if not pitch_df.empty:
         if matchup_df.empty:
             st.info("No matchup data available.")
         else:
-            st.dataframe(matchup_df, hide_index=True, use_container_width=True)
+            st.dataframe(matchup_df, hide_index=True, use_container_width=True, column_config=MATCHUP_COLUMN_CONFIG)
