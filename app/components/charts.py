@@ -13,10 +13,12 @@ import plotly.graph_objects as go
 from app.components.theme import (
     MUTED,
     SURFACE,
+    TEAM_PALETTE,
     assign_colors,
     categorical_palette,
     chart_mode,
-    sequential_colorscale,
+    heat_colorscale,
+    outcome_color_map,
     stat_format,
     stat_label,
 )
@@ -26,6 +28,18 @@ def _hex_to_rgba(hex_color: str, alpha: float) -> str:
     h = hex_color.lstrip("#")
     r, g, b = (int(h[i : i + 2], 16) for i in (0, 2, 4))
     return f"rgba({r},{g},{b},{alpha})"
+
+
+def _color_map(categories, color_col: str, mode: str) -> dict[str, str]:
+    """color_discrete_map for the given column — teams draw positionally
+    from the bespoke 10-color TEAM_PALETTE, everything else positionally
+    from the general categorical palette. Positional (not hashed per name)
+    so whatever's actually shown gets the most mutually-distinct colors
+    available, at the cost of a team's color not being fixed across charts
+    that show a different subset."""
+    if color_col == "team":
+        return assign_colors(categories, mode, palette=TEAM_PALETTE[mode])
+    return assign_colors(categories, mode)
 
 
 def scatter_chart(df: pd.DataFrame, x: str, y: str, color_col: str | None = "team", hover_name: str = "player"):
@@ -38,7 +52,7 @@ def scatter_chart(df: pd.DataFrame, x: str, y: str, color_col: str | None = "tea
         x=x,
         y=y,
         color=color_col if has_color else None,
-        color_discrete_map=assign_colors(df[color_col], mode) if has_color else None,
+        color_discrete_map=_color_map(df[color_col], color_col, mode) if has_color else None,
         color_discrete_sequence=None if has_color else [categorical_palette(mode)[0]],
         hover_name=hover_name if has_hover_name else None,
     )
@@ -79,7 +93,7 @@ def trend_chart(df: pd.DataFrame, x: str, y: str, color_col: str | None = None, 
         x=x,
         y=y,
         color=color_col if has_color else None,
-        color_discrete_map=assign_colors(df[color_col], mode) if has_color else None,
+        color_discrete_map=_color_map(df[color_col], color_col, mode) if has_color else None,
         color_discrete_sequence=None if has_color else [categorical_palette(mode)[0]],
         markers=True,
     )
@@ -118,7 +132,7 @@ def radar_chart(df: pd.DataFrame, value_cols: list[str], name_col: str = "team")
     can't share one radial axis (the "one axis" rule applies to radar spokes
     the same as any other chart)."""
     mode = chart_mode()
-    color_map = assign_colors(df[name_col], mode)
+    color_map = _color_map(df[name_col], name_col, mode)
     labels = [stat_label(c) for c in value_cols]
     labels_closed = labels + labels[:1]
 
@@ -183,7 +197,7 @@ def spray_chart(df: pd.DataFrame, pull_col: str = "hitpull", distance_col: str =
         fig.update_layout(polar=dict(bgcolor=SURFACE[mode], radialaxis=dict(visible=True)), margin=dict(l=20, r=20, t=20, b=20))
         return fig
 
-    color_map = assign_colors(df[color_col], mode) if has_color else {}
+    color_map = outcome_color_map(mode) if (has_color and color_col == "outcome") else (assign_colors(df[color_col], mode) if has_color else {})
     max_distance = df[distance_col].max()
     groups = df.groupby(color_col) if has_color else [(None, df)]
     for name, group in groups:
@@ -254,7 +268,7 @@ def spray_heatmap(df: pd.DataFrame, pull_col: str = "hitpull", bins: int = 9):
             base=infield_r,
             marker=dict(
                 color=counts.values,
-                colorscale=sequential_colorscale(mode),
+                colorscale=heat_colorscale(mode),
                 cmin=0,
                 showscale=True,
                 colorbar=dict(title=dict(text="Batted balls", side="right"), thickness=14, len=0.7),
@@ -287,8 +301,11 @@ def spray_heatmap(df: pd.DataFrame, pull_col: str = "hitpull", bins: int = 9):
         polar=dict(
             bgcolor=SURFACE[mode],
             sector=[0, 180],
-            radialaxis=dict(visible=False, range=[0, outer_r * 1.05]),
-            angularaxis=dict(type="linear", rotation=0, direction="counterclockwise", showticklabels=False, ticks=""),
+            radialaxis=dict(visible=False, showline=False, range=[0, outer_r * 1.05]),
+            angularaxis=dict(
+                type="linear", rotation=0, direction="counterclockwise",
+                showticklabels=False, ticks="", showline=False, showgrid=False,
+            ),
         ),
         margin=dict(l=20, r=20, t=20, b=20),
         showlegend=False,
@@ -303,7 +320,7 @@ def bar_chart(df: pd.DataFrame, x: str, y: str):
     positionally labeled on the x-axis, a legend would be redundant and is
     left off (unlike overlapping marks, where color is the only cue)."""
     mode = chart_mode()
-    color_map = assign_colors(df[x], mode)
+    color_map = _color_map(df[x], x, mode)
 
     fig = px.bar(df, x=x, y=y, color=x, color_discrete_map=color_map)
     fig.update_traces(

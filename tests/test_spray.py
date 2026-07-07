@@ -3,7 +3,6 @@ from db.models import (
     Game,
     League,
     LeagueSeason,
-    LeagueSeasonContext,
     PlateAppearance,
     Player,
     PlayerSeason,
@@ -69,8 +68,9 @@ def test_compute_batter_spray_labels_plurality_bucket(session):
     league_season, team_season, game = _build_fixture(session)
     batter = _add_player(session, team_season, source_id=1, bats="R")
 
-    session.add(LeagueSeasonContext(league_season_id=league_season.id, pull_tertile_low=-10.0, pull_tertile_high=10.0))
-    # RHH: adj_pull = -hitpull. Two pulled (-30 -> adj +30), one center (5 -> adj -5), one oppo (30 -> adj -30).
+    # RHH: adj_pull = -hitpull, bucketed against fixed +/-15 thirds of the
+    # 90-degree fan. Two pulled (-30 -> adj +30), one center (5 -> adj -5),
+    # one oppo (30 -> adj -30).
     session.add_all(
         [
             _pa(game, batter.id, hitpull=-30, source_play_id=1),
@@ -91,11 +91,30 @@ def test_compute_batter_spray_labels_plurality_bucket(session):
     assert row.tendency_label == "pull"
 
 
+def test_compute_batter_spray_at_exact_third_boundary(session):
+    league_season, team_season, game = _build_fixture(session)
+    # LHH: adj_pull = hitpull as-is. Exactly +/-15 sits in "center" (bucket
+    # boundaries are `> 15` for pull and `< -15` for oppo, not >=/<=).
+    batter = _add_player(session, team_season, source_id=1, bats="L")
+    session.add_all(
+        [
+            _pa(game, batter.id, hitpull=15, source_play_id=1),
+            _pa(game, batter.id, hitpull=-15, source_play_id=2),
+        ]
+    )
+    session.commit()
+
+    compute_batter_spray(session, league_season.id)
+    row = session.query(BatterSpraySeasonStats).filter_by(player_season_id=batter.id).one()
+    assert row.center_count == 2
+    assert row.pull_count == 0
+    assert row.oppo_count == 0
+
+
 def test_compute_batter_spray_skips_switch_hitters(session):
     league_season, team_season, game = _build_fixture(session)
     switch = _add_player(session, team_season, source_id=2, bats="S")
 
-    session.add(LeagueSeasonContext(league_season_id=league_season.id, pull_tertile_low=-10.0, pull_tertile_high=10.0))
     session.add(_pa(game, switch.id, hitpull=-30, source_play_id=1))
     session.commit()
 
@@ -104,10 +123,6 @@ def test_compute_batter_spray_skips_switch_hitters(session):
     assert session.query(BatterSpraySeasonStats).count() == 0
 
 
-def test_compute_batter_spray_returns_zero_without_league_context(session):
-    league_season, team_season, game = _build_fixture(session)
-    batter = _add_player(session, team_season, source_id=3, bats="R")
-    session.add(_pa(game, batter.id, hitpull=-30, source_play_id=1))
-    session.commit()
-
+def test_compute_batter_spray_returns_zero_without_batted_ball_data(session):
+    league_season, _team_season, _game = _build_fixture(session)
     assert compute_batter_spray(session, league_season.id) == 0

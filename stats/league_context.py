@@ -14,54 +14,12 @@ from db.models import (
     Game,
     LeagueSeasonContext,
     PitchingSeasonStats,
-    PlateAppearance,
-    Player,
     PlayerSeason,
     TeamSeason,
 )
 from db.upsert import upsert
 from stats import constants
 from stats.rate_stats import obp, outs_to_ip, slg
-
-
-def _percentile(sorted_values: list[float], q: float) -> float:
-    """Linear-interpolation percentile (numpy's default method) over an
-    already-sorted list."""
-    n = len(sorted_values)
-    if n == 1:
-        return sorted_values[0]
-    idx = q * (n - 1)
-    lo = int(idx)
-    hi = min(lo + 1, n - 1)
-    frac = idx - lo
-    return sorted_values[lo] + (sorted_values[hi] - sorted_values[lo]) * frac
-
-
-def _pull_tertiles(session: Session, league_season_id: int) -> tuple[float | None, float | None]:
-    """33rd/67th percentile cutoffs of this league-season's handedness-
-    adjusted pull-direction distribution (see PlateAppearance.hitpull's
-    docstring in db/models.py for the raw sign convention). Adjusted so
-    positive always means "pulled" regardless of batter handedness: for a
-    RHH, pulling means hitpull is negative (left/third-base side), so it's
-    negated; for a LHH it's used as-is. Switch hitters and unknown
-    handedness are excluded — no per-PA batting-side data exists to know
-    which side they actually hit from that plate appearance."""
-    rows = session.execute(
-        select(PlateAppearance.hitpull, Player.bats)
-        .join(PlayerSeason, PlayerSeason.id == PlateAppearance.batter_player_season_id)
-        .join(TeamSeason, TeamSeason.id == PlayerSeason.team_season_id)
-        .join(Player, Player.id == PlayerSeason.player_id)
-        .where(
-            TeamSeason.league_season_id == league_season_id,
-            PlateAppearance.hitpull.is_not(None),
-        )
-    ).all()
-    adjusted = sorted(
-        (-hitpull if bats == "R" else hitpull) for hitpull, bats in rows if bats in ("L", "R")
-    )
-    if not adjusted:
-        return None, None
-    return _percentile(adjusted, 1 / 3), _percentile(adjusted, 2 / 3)
 
 
 def _league_batting_totals(session: Session, league_season_id: int) -> dict[str, int]:
@@ -147,8 +105,6 @@ def compute_league_context(session: Session, league_season_id: int) -> int:
     replacement_runs_per_pa = constants.REPLACEMENT_RUNS_PER_600_PA / 600.0
     replacement_fip_delta = constants.REPLACEMENT_FIP_RUNS_PER_9
 
-    pull_tertile_low, pull_tertile_high = _pull_tertiles(session, league_season_id)
-
     context_id = upsert(
         session,
         LeagueSeasonContext,
@@ -164,8 +120,6 @@ def compute_league_context(session: Session, league_season_id: int) -> int:
             "runs_per_win": runs_per_win,
             "replacement_runs_per_pa": replacement_runs_per_pa,
             "replacement_fip_delta": replacement_fip_delta,
-            "pull_tertile_low": pull_tertile_low,
-            "pull_tertile_high": pull_tertile_high,
         },
         ["league_season_id"],
     )

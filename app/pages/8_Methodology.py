@@ -126,15 +126,18 @@ st.markdown(
     "pull-tendency read, just not a to-scale field diagram."
 )
 st.markdown(
-    "**Pull / Center / Oppo tendency**: each league-season, every batted ball's pull value is "
-    "adjusted for the batter's own handedness (so \"pulled\" always means the same thing "
-    "regardless of which side someone bats from), then split into thirds across the whole "
-    "league's batted balls that season — a self-calibrated cutoff, the same philosophy as the "
-    "league-average wOBA/FIP above. A player's tendency label is whichever third holds the "
-    "most of their own batted balls. **Switch hitters are excluded** from this entirely — there's "
-    "no per-plate-appearance record of which side they actually batted from in a given at-bat, "
-    "so classifying them would risk mislabeling roughly half their pulled balls as opposite-field "
-    "and vice versa."
+    "**Pull / Center / Oppo tendency**: every batted ball's pull value is adjusted for the "
+    "batter's own handedness (so \"pulled\" always means the same thing regardless of which "
+    "side someone bats from), then bucketed against **fixed thirds of the true 90-degree "
+    "fair-territory fan** — the middle 30 degrees (+/-15 degrees off dead-center) is Center, "
+    "the outer 15-45 degrees on the batter's pull side is Pull, and the same range on the "
+    "other side is Oppo. Unlike the league-average wOBA/FIP above, this is deliberately **not** "
+    "self-calibrated to this league's own batted-ball distribution — a real ballpark's foul "
+    "lines don't move with it, so neither does \"pulled\". A player's tendency label is "
+    "whichever third holds the most of their own batted balls. **Switch hitters are excluded** "
+    "from this entirely — there's no per-plate-appearance record of which side they actually "
+    "batted from in a given at-bat, so classifying them would risk mislabeling roughly half "
+    "their pulled balls as opposite-field and vice versa."
 )
 st.markdown(
     "**Spray chart**: plotted on a radial (polar) chart — angle from the raw pull direction, "
@@ -145,11 +148,12 @@ st.markdown(
 )
 st.markdown(
     "**Direction heatmap**: a second chart alongside the spray chart, on the same schematic "
-    "field and the same +/-45 degree fan, but dropping hit distance entirely — a handful of "
-    "raw distance values are negative, which is impossible, so distance is the less trustworthy "
-    "of the two fields. Batted balls are bucketed into angular wedges spanning the full field "
-    "depth, colored only by how many landed in that direction, to give a distance-independent "
-    "read on where a player's contact actually goes."
+    "field and the same +/-45 degree fan (with the surrounding polar grid/boundary dropped — "
+    "only the field lines themselves frame the chart), but dropping hit distance entirely — a "
+    "handful of raw distance values are negative, which is impossible, so distance is the less "
+    "trustworthy of the two fields. Batted balls are bucketed into angular wedges spanning the "
+    "full field depth, colored red for the most common directions and blue for the least "
+    "common, to give a distance-independent read on where a player's contact actually goes."
 )
 st.markdown(
     "**First-pitch-strike%**: the source data's own pitch-result flags (ball/called "

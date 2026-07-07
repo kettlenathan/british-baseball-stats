@@ -23,8 +23,9 @@ def recompute_league_season(session: Session, league_season_id: int) -> None:
     aggregate_batting(session, league_season_id)
     aggregate_pitching(session, league_season_id)
     compute_league_context(session, league_season_id)
-    # compute_batter_spray depends on compute_league_context's pull tertile
-    # cutoffs; compute_matchups has no such dependency.
+    # compute_batter_spray and compute_matchups both only need
+    # plate_appearances, not compute_league_context's output — order among
+    # these three doesn't matter, they're just grouped here for one pass.
     compute_batter_spray(session, league_season_id)
     compute_matchups(session, league_season_id)
     compute_batting_war(session, league_season_id)

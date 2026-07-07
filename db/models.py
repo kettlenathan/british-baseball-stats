@@ -405,13 +405,6 @@ class LeagueSeasonContext(Base):
     runs_per_win: Mapped[float | None] = mapped_column(Float, nullable=True)
     replacement_runs_per_pa: Mapped[float | None] = mapped_column(Float, nullable=True)
     replacement_fip_delta: Mapped[float | None] = mapped_column(Float, nullable=True)
-
-    # 33rd/67th percentile cutoffs of this league-season's handedness-adjusted
-    # batted-ball pull-direction distribution — self-calibrated per season,
-    # same philosophy as lg_woba/fip_constant above. Used to bucket batters
-    # into pull/center/oppo tendency — see stats/spray.py.
-    pull_tertile_low: Mapped[float | None] = mapped_column(Float, nullable=True)
-    pull_tertile_high: Mapped[float | None] = mapped_column(Float, nullable=True)
     computed_at: Mapped[dt.datetime] = mapped_column(DateTime, default=_now)
 
 
@@ -444,12 +437,12 @@ class PitchingWar(Base):
 
 class BatterSpraySeasonStats(Base):
     """Season-level pull/center/oppo tendency for one batter, bucketed
-    against that league-season's self-calibrated tertile thresholds (see
-    LeagueSeasonContext.pull_tertile_low/high, stats/spray.py). Switch
-    hitters (Player.bats == "S") are excluded — no per-PA batting-side data
-    exists to know which side they actually hit from, so no row is written
-    for them; career tendency is summed across these rows at read time
-    (app/components/data_access.py), not stored separately."""
+    against fixed thirds of the true 90-degree fair-territory fan (see
+    stats/spray.py). Switch hitters (Player.bats == "S") are excluded — no
+    per-PA batting-side data exists to know which side they actually hit
+    from, so no row is written for them; career tendency is summed across
+    these rows at read time (app/components/data_access.py), not stored
+    separately."""
 
     __tablename__ = "batter_spray_season_stats"
 

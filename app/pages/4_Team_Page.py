@@ -5,9 +5,15 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
 
 import streamlit as st
 
-from app.components.data_access import batting_leaderboard, pitching_leaderboard, team_roster
+from app.components.data_access import batting_leaderboard, pitching_leaderboard, team_recent_games, team_roster, team_season_stats
 from app.components.filters import league_season_selector
-from app.components.formatting import BATTING_COLUMN_CONFIG, PITCHING_COLUMN_CONFIG
+from app.components.formatting import (
+    BATTING_COLUMN_CONFIG,
+    PITCHING_COLUMN_CONFIG,
+    RECENT_GAMES_COLUMN_CONFIG,
+    ROSTER_COLUMN_CONFIG,
+    TEAM_COLUMN_CONFIG,
+)
 
 st.set_page_config(page_title="Team Page", page_icon="🏟️", layout="wide")
 st.title("Team Page")
@@ -24,11 +30,37 @@ if roster_df.empty:
 teams = sorted(roster_df["team"].unique())
 team = st.selectbox("Team", teams)
 
+st.subheader("Team stats")
+stats_df = team_season_stats(league_season_id)
+team_stats_row = stats_df[stats_df["team"] == team]
+if team_stats_row.empty:
+    st.info("No combined stats available for this team yet.")
+else:
+    st.dataframe(
+        team_stats_row,
+        hide_index=True,
+        use_container_width=True,
+        column_config=TEAM_COLUMN_CONFIG,
+    )
+
+st.subheader("Recent performance")
+recent_df = team_recent_games(league_season_id, team, weeks=3)
+if recent_df.empty:
+    st.info("No games in the last 3 weekends for this team.")
+else:
+    st.dataframe(
+        recent_df,
+        hide_index=True,
+        use_container_width=True,
+        column_config=RECENT_GAMES_COLUMN_CONFIG,
+    )
+
 st.subheader("Roster")
 st.dataframe(
     roster_df[roster_df["team"] == team].drop(columns=["team"]),
     hide_index=True,
     use_container_width=True,
+    column_config=ROSTER_COLUMN_CONFIG,
 )
 
 col1, col2 = st.columns(2)

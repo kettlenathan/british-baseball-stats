@@ -22,4 +22,7 @@ def player_multiselect(key: str = "player_compare") -> list[str]:
 
 
 def team_multiselect(key: str = "team_compare") -> list[str]:
-    return st.multiselect("Teams", all_team_names(), key=key)
+    # Capped at 10 to match TEAM_PALETTE's size (theme.py) — colors are
+    # assigned positionally per chart, so past 10 selections two teams
+    # would have to repeat the same color.
+    return st.multiselect("Teams", all_team_names(), key=key, max_selections=10)
