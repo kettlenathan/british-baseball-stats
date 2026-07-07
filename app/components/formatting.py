@@ -33,6 +33,7 @@ PITCHING_COLUMN_CONFIG = {
     "era_plus": st.column_config.NumberColumn("ERA+", format="%.0f"),
     "war": st.column_config.NumberColumn("WAR", format="%.2f"),
     "ip": st.column_config.NumberColumn("IP", format="%.1f"),
+    "fps_pct": st.column_config.NumberColumn("F-Strike%", format="percent"),
 }
 
 PCT_COLUMN_CONFIG = {

@@ -12,6 +12,7 @@ from db.models import (
     BattingSeasonStats,
     PitchingGameLine,
     PitchingSeasonStats,
+    PlateAppearance,
     PlayerSeason,
     TeamSeason,
 )
@@ -70,6 +71,24 @@ def aggregate_pitching(session: Session, league_season_id: int | None = None) ->
         totals["wins"] = row.wins or 0
         totals["losses"] = row.losses or 0
         totals["saves"] = row.saves or 0
+
+        # First-pitch-strike%, from PlateAppearance.first_pitch_strike (None
+        # excluded — undeterminable PAs shouldn't count in either the
+        # numerator or denominator). Folded into the same `totals` dict as
+        # everything else above so there's a single upsert call per player —
+        # a second, separate upsert would zero out every column it omits
+        # (see db/upsert.py's ON CONFLICT DO UPDATE).
+        fps_row = session.execute(
+            select(
+                func.count(PlateAppearance.id),
+                func.sum(cast(PlateAppearance.first_pitch_strike, Integer)),
+            ).where(
+                PlateAppearance.pitcher_player_season_id == ps_id,
+                PlateAppearance.first_pitch_strike.is_not(None),
+            )
+        ).one()
+        totals["fps_pa"] = fps_row[0] or 0
+        totals["fps_strikes"] = fps_row[1] or 0
 
         upsert(session, PitchingSeasonStats, {"player_season_id": ps_id, **totals}, ["player_season_id"])
         count += 1

@@ -19,7 +19,19 @@ scraper/recon/risp_lob_plan.md for how this is used: RISP at-bats/hits per
 batter (folded into batting_game_lines) and runners left on base per team
 per game (folded into games.home_lob/away_lob). `batterid` in these records
 is confirmed to be the same id space as boxScore's `playerid` (verified: a
-game's gamePlays batterids are always a subset of its boxScore playerids).
+game's gamePlays batterids are always a subset of its boxScore playerids);
+`pitcherid` is assumed to be the same id space but this is less thoroughly
+verified — see PlateAppearance.pitcher_player_season_id's nullability.
+
+The same feed also yields one row per plate appearance (db.models.
+PlateAppearance) for batter pull/spray tendency, batter-vs-pitcher matchups,
+and pitcher first-pitch-strike% — see `_extract_plate_appearances` below.
+Several of this league's per-pitch fields are confirmed always zero and
+never usable (`ball`/`called`/`swing`/`foul`/`inplay`, and the true
+`hitx`/`hity`/`exitvelo` batted-ball coordinates) — first-pitch-strike is
+instead derived by diffing the `balls`/`strikes` count between pitches (see
+`_first_pitch_strike`), and batted-ball location is approximated from
+`hitpull`/`hitdistance`/`hittype` instead of true coordinates.
 """
 
 from typing import Any
@@ -27,7 +39,7 @@ from typing import Any
 from sqlalchemy.orm import Session
 
 from config import BASE_URL
-from db.models import BattingGameLine, Game, PitchingGameLine, Player, PlayerSeason, TeamSeason
+from db.models import BattingGameLine, Game, PitchingGameLine, PlateAppearance, Player, PlayerSeason, TeamSeason
 from db.upsert import upsert
 from scraper.discovery import resolve_fetch_code
 from scraper.http_client import fetch_inertia
@@ -155,6 +167,96 @@ def _extract_lob(game_plays: dict[str, Any]) -> tuple[int | None, int | None]:
     return (home_lob, away_lob) if found_any else (None, None)
 
 
+def _first_pitch_strike(pa_records: list[dict[str, Any]]) -> bool | None:
+    """This league's per-pitch called/swing/foul/inplay flags are confirmed
+    always zero (dead fields, never populated) — so a first-pitch strike
+    can't be read directly off a flag. Instead, find the true first pitch
+    (the earliest record at a 0-0 count) and diff the balls/strikes count
+    against the next record in the PA: strikes increased -> strike, balls
+    increased -> ball. If the first pitch is itself the PA-ending record
+    (ball in play or HBP on 0-0), it's a strike unless it was an HBP. Returns
+    None if undeterminable (no 0-0 record found)."""
+    fp_idx = next(
+        (i for i, r in enumerate(pa_records) if r.get("balls") == 0 and r.get("strikes") == 0), None
+    )
+    if fp_idx is None:
+        return None
+    first_pitch = pa_records[fp_idx]
+    if fp_idx == len(pa_records) - 1:
+        return not first_pitch.get("hbp")
+    next_pitch = pa_records[fp_idx + 1]
+    if (next_pitch.get("strikes") or 0) > (first_pitch.get("strikes") or 0):
+        return True
+    if (next_pitch.get("balls") or 0) > (first_pitch.get("balls") or 0):
+        return False
+    return None
+
+
+def _extract_plate_appearances(
+    game_plays: dict[str, Any], ps_id_by_source: dict[int, int], game_id: int
+) -> list[dict[str, Any]]:
+    """One row per completed plate appearance — a maximal run of a half-
+    inning's plays (in `playorder`) up to and including the first record
+    with `pa` set, skipping `nopitch` placeholder records (e.g. "Play Ball"
+    at game start). Feeds batter pull/spray tendency, batter-vs-pitcher
+    matchups, and pitcher first-pitch-strike% (see stats/spray.py,
+    stats/matchups.py, stats/aggregation.py). Rows whose batter can't be
+    resolved are dropped; `pitcher_player_season_id` may be None (see
+    db/models.py:PlateAppearance)."""
+    rows: list[dict[str, Any]] = []
+    if not isinstance(game_plays, dict):
+        return rows
+    for halves in game_plays.values():
+        if not isinstance(halves, dict):
+            continue
+        for half_name, plays in halves.items():
+            if not isinstance(plays, list) or not plays:
+                continue
+            buffer: list[dict[str, Any]] = []
+            for rec in sorted(plays, key=lambda p: p.get("playorder") or 0):
+                if rec.get("nopitch"):
+                    continue
+                buffer.append(rec)
+                if not rec.get("pa"):
+                    continue
+                terminal = buffer[-1]
+                batter_ps_id = ps_id_by_source.get(terminal.get("batterid"))
+                if batter_ps_id is not None:
+                    is_ball_in_play = (
+                        terminal.get("ab") == 1
+                        and not terminal.get("strikeout")
+                        and not terminal.get("bb")
+                        and not terminal.get("hbp")
+                    )
+                    rows.append(
+                        {
+                            "source_play_id": terminal["id"],
+                            "game_id": game_id,
+                            "inning": terminal.get("inning"),
+                            "half": half_name,
+                            "batter_player_season_id": batter_ps_id,
+                            "pitcher_player_season_id": ps_id_by_source.get(terminal.get("pitcherid")),
+                            "ab": int(terminal.get("ab") or 0),
+                            "h": int(terminal.get("h") or 0),
+                            "doubles": int(terminal.get("double") or 0),
+                            "triples": int(terminal.get("triple") or 0),
+                            "hr": int(terminal.get("homerun") or 0),
+                            "bb": int(terminal.get("bb") or 0),
+                            "ibb": int(terminal.get("ibb") or 0),
+                            "hbp": int(terminal.get("hbp") or 0),
+                            "so": int(terminal.get("strikeout") or 0),
+                            "sf": int(terminal.get("sf") or 0),
+                            "rbi": int(terminal.get("rbi") or 0),
+                            "first_pitch_strike": _first_pitch_strike(buffer),
+                            "hitpull": terminal.get("hitpull") if is_ball_in_play else None,
+                            "hitdistance": terminal.get("hitdistance") if is_ball_in_play else None,
+                            "hittype": terminal.get("hittype") if is_ball_in_play else None,
+                        }
+                    )
+                buffer = []
+    return rows
+
+
 def scrape_boxscore(
     league_code: str,
     year: int,
@@ -249,6 +351,9 @@ def scrape_boxscore(
     home_lob, away_lob = _extract_lob(game_plays)
     game.home_lob = home_lob
     game.away_lob = away_lob
+
+    for pa_row in _extract_plate_appearances(game_plays, player_season_id_by_player, game.id):
+        upsert(session, PlateAppearance, pa_row, ["source_play_id"])
 
     # Pass 2: sum each player's per-record fields and upsert one
     # batting_game_lines / pitching_game_lines row per player.
