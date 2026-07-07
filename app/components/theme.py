@@ -21,6 +21,17 @@ CATEGORICAL = {
 SURFACE = {"light": "#fcfcfb", "dark": "#1a1a19"}
 MUTED = "#898781"
 
+# Single-hue sequential ramp (magnitude only — e.g. batted-ball direction
+# density) built from the categorical palette's primary blue. Light mode
+# steps from a near-surface tint up to a saturated dark blue; dark mode
+# flips anchor, stepping from a surface-anchored tint up to a bright blue
+# that still pops against the dark background — same "light->dark, one hue"
+# shape in both, just anchored to each mode's own surface.
+SEQUENTIAL = {
+    "light": ["#eef4fc", "#a8c9ef", "#5a97e0", "#1c5aa8"],
+    "dark": ["#22344a", "#2f5a8c", "#3987e5", "#7fc0ff"],
+}
+
 STAT_LABELS = {
     "year": "Year", "pa": "PA", "ab": "AB", "h": "H", "doubles": "2B", "triples": "3B",
     "hr": "HR", "rbi": "RBI", "bb": "BB", "so": "SO", "sb": "SB",
@@ -33,6 +44,7 @@ STAT_LABELS = {
     "pct": "Win %", "team": "Team", "player": "Player", "league": "League",
     "po": "PO", "a": "A", "e": "E", "dp": "DP", "fpct": "FPCT",
     "avg_risp": "AVG w/RISP", "r_pg": "R/G", "ra_pg": "RA/G", "lob_pg": "LOB/G",
+    "fps_pct": "F-Strike%", "hitdistance": "Distance", "outcome": "Outcome",
 }
 
 STAT_FORMAT = {
@@ -45,6 +57,7 @@ STAT_FORMAT = {
     "w": ",.0f", "l": ",.0f", "sv": ",.0f", "er": ",.0f",
     "po": ",.0f", "a": ",.0f", "e": ",.0f", "dp": ",.0f", "fpct": ".3f",
     "avg_risp": ".3f", "r_pg": ".2f", "ra_pg": ".2f", "lob_pg": ".2f",
+    "fps_pct": ".1%", "hitdistance": ",.0f",
 }
 
 
@@ -66,6 +79,12 @@ def chart_mode() -> str:
 
 def categorical_palette(mode: str | None = None) -> list[str]:
     return CATEGORICAL[mode or chart_mode()]
+
+
+def sequential_colorscale(mode: str | None = None) -> list[list]:
+    colors = SEQUENTIAL[mode or chart_mode()]
+    n = len(colors) - 1
+    return [[i / n, c] for i, c in enumerate(colors)]
 
 
 def assign_colors(categories, mode: str | None = None) -> dict[str, str]:

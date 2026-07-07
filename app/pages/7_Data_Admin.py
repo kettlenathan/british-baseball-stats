@@ -28,6 +28,13 @@ else:
     col1, col2 = st.columns(2)
     leagues = col1.multiselect("Leagues", SENIOR_LEAGUE_CODES, default=["nbl"])
     years = col2.text_input("Years (e.g. 2026 or 2024-2026)", value="2026")
+    window = st.radio(
+        "Box scores to fetch",
+        ["Full season", "Last week", "Last month"],
+        horizontal=True,
+        help="Limiting to a recent window skips re-checking box scores for games "
+        "already final for a while — much faster for a routine mid-season refresh.",
+    )
     force_refresh = st.checkbox("Force refresh (bypass cache, re-hit the site)")
 
     if st.button("Run refresh", type="primary", disabled=not leagues):
@@ -40,6 +47,10 @@ else:
             "--years",
             years,
         ]
+        if window == "Last week":
+            cmd.append("--last-week")
+        elif window == "Last month":
+            cmd.append("--last-month")
         if force_refresh:
             cmd.append("--force-refresh")
 

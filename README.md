@@ -12,7 +12,9 @@ ERA+, a simplified WAR) from the raw play data, and serves it all through a Stre
 - **Leaderboards** — league-wide batting/pitching leaders and team standings, filterable
   by league and season.
 - **Player Explorer** / **Player Page** — browse and search all players; per-player career
-  batting and pitching stat lines.
+  batting and pitching stat lines, pull/center/oppo batted-ball tendency with a spray-chart
+  approximation (season or career, splittable by opposing pitcher/batter handedness), and
+  batter-vs-pitcher matchup history.
 - **Team Page** — team-level season stats and roster.
 - **Player Comparison** / **Team Comparison** — put 2+ players or teams side by side with
   trend charts across seasons.
@@ -73,12 +75,15 @@ Full architectural detail (page-by-page, module-by-module) is in `CLAUDE.md`.
 
 ## Methodology & WAR disclaimer
 
-This league doesn't have play-by-play or batted-ball tracking data, so some things published
-sabermetric sites take for granted aren't available here. In particular, **WAR in this app is
-offense/pitching only — there is no defensive component at all**, and no park factors. It's
-self-calibrated to this league's own actual run environment each season (so "0 WAR" means
-league-average *here*, not relative to MLB), but it isn't directly comparable to official
-bWAR/fWAR. The in-app **Methodology** page has the full breakdown of every formula used.
+This league's box scores do carry play-by-play data and a coarse batted-ball proxy (pull
+direction, hit distance, ground/fly/line/pop type), which is what powers the spray-chart and
+matchup features above — but never true field coordinates, exit velocity, or fielder
+positioning/range data. So some things published sabermetric sites take for granted still
+aren't available here: in particular, **WAR in this app is offense/pitching only — there is
+no defensive component at all**, and no park factors. It's self-calibrated to this league's
+own actual run environment each season (so "0 WAR" means league-average *here*, not relative
+to MLB), but it isn't directly comparable to official bWAR/fWAR. The in-app **Methodology**
+page has the full breakdown of every formula used.
 
 ## Data refresh
 

@@ -1,6 +1,6 @@
 """Orchestrates the stats pipeline in dependency order: aggregation ->
-league context -> WAR. Safe to re-run any time after new games are scraped;
-never touches raw fact tables.
+league context -> batter spray / matchups -> WAR. Safe to re-run any time
+after new games are scraped; never touches raw fact tables.
 
 Usage: uv run python -m stats.recompute [--league-season-id N]
 """
@@ -14,6 +14,8 @@ from db.engine import get_session
 from db.models import LeagueSeason
 from stats.aggregation import aggregate_batting, aggregate_pitching
 from stats.league_context import compute_league_context
+from stats.matchups import compute_matchups
+from stats.spray import compute_batter_spray
 from stats.war import compute_batting_war, compute_pitching_war
 
 
@@ -21,6 +23,10 @@ def recompute_league_season(session: Session, league_season_id: int) -> None:
     aggregate_batting(session, league_season_id)
     aggregate_pitching(session, league_season_id)
     compute_league_context(session, league_season_id)
+    # compute_batter_spray depends on compute_league_context's pull tertile
+    # cutoffs; compute_matchups has no such dependency.
+    compute_batter_spray(session, league_season_id)
+    compute_matchups(session, league_season_id)
     compute_batting_war(session, league_season_id)
     compute_pitching_war(session, league_season_id)
 

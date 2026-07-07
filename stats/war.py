@@ -3,13 +3,18 @@
 DISCLAIMER (also surfaced as a UI caption wherever WAR is shown): this is an
 approximation, not official bWAR/fWAR. It is missing:
   - park factors (no per-venue run environment data for this league)
-  - batted-ball / defensive tracking data, so there is no defensive
-    component at all (batting WAR is offense-only, pitching WAR is
-    FIP-based only)
+  - a defensive component, so batting WAR is offense-only and pitching WAR
+    is FIP-based only. The box-score play-by-play does carry a coarse
+    batted-ball proxy (pull direction, hit distance, ground/fly/line/pop
+    type — see PlateAppearance in db/models.py, used for spray charts and
+    pull tendency elsewhere in stats/), but never true field coordinates,
+    exit velocity, or fielder positioning/range data, so it can't support a
+    real defensive metric.
   - linear weights derived from this league's own run-expectancy matrix —
     the wOBA/FIP coefficients are fixed, published sabermetric constants
-    (see stats/constants.py), not re-derived from play-by-play data (which
-    this league doesn't have)
+    (see stats/constants.py) rather than solved from this league's own
+    play-by-play, since that needs a far larger sample than this league's
+    scale can support for a stable result
 
 What IS self-calibrated to this league, season by season (see
 stats/league_context.py): league-average wOBA/ERA/FIP, the FIP additive
