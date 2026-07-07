@@ -211,11 +211,19 @@ writes back upstream.
 
 ## Data refresh cadence
 
-Refresh is **manual only, no scheduler exists** — there is no GitHub Actions workflow, cron
-job, Windows Task Scheduler entry, or scheduling library in this repo. It's triggered exactly
-two ways, both ending at the same code path (`scraper.pipeline.run()` then
-`stats.recompute.recompute_league_season()` per touched `league_season_id`, via
-`scripts/refresh_data.py`):
+Refresh runs both on a schedule and on demand — three triggers, all ending at the same code
+path (`scraper.pipeline.run()` then `stats.recompute.recompute_league_season()` per touched
+`league_season_id`, via `scripts/refresh_data.py`):
+- **`.github/workflows/main.yml`** — a GitHub Actions cron job, Sundays 21:00 UK time
+  (`0 20 * * 0` UTC) plus manual `workflow_dispatch`. Runs `uv sync` then `scripts.refresh_data`
+  windowed with `--last-week` (see below) for every league, commits the resulting `data/stats.db`
+  as `github-actions`, and pushes straight to `main` — there's no PR/review step, so a bad scrape
+  commits directly. It does **not** run `alembic upgrade head` first; it relies on the
+  already-committed `data/stats.db` already carrying the current schema, so any schema-changing
+  migration must be applied and committed locally *before* the next scheduled run (see
+  "Deployment" below) — a run against the old pre-plate-appearances schema already produced one
+  divergent auto-commit that had to be reconciled by hand when merging, and the same class of
+  conflict can recur after a future migration.
 - CLI: `uv run python -m scripts.refresh_data --leagues <codes> --years <spec>
   [--force-refresh] [--last-week | --last-month]`
 - The Data Admin page's "Run refresh" button (`app/pages/7_Data_Admin.py`), which shells out
@@ -234,15 +242,14 @@ the season. Omitting both flags keeps the full-season behavior (needed once, e.g
 new derived fields, to backfill every already-scraped game — the box-score JSON responses are
 cached, so this reprocesses cached data rather than re-hitting the network).
 
-**Recommended cadence: weekly, on Monday** (games are played Sundays). `scrape_schedule()`
-only queues box-score fetches for games already `status == "final"`, so running Sunday night
-risks missing games the site hasn't finalized yet — a Monday run reliably picks up all of
-Sunday's completed games in one pass, e.g.:
+**Recommended cadence: weekly** (games are played Sundays). `scrape_schedule()` only queues
+box-score fetches for games already `status == "final"`, so a Sunday-night run (the scheduled
+workflow's actual timing) can miss games the site hasn't finalized yet as of 21:00 UK — a
+missed game is simply picked up by the following week's `--last-week` window instead, so this
+is a one-week-late catch rather than a permanent gap:
 ```
 uv run python -m scripts.refresh_data --leagues nbl,d2,d3,d4,d5 --years 2026 --last-week
 ```
-This is documentation of the recommended process, not automation — no scheduled job runs
-this today.
 
 ## Deployment
 

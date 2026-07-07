@@ -38,7 +38,8 @@ jobs:
         run: |
           uv run python -m scripts.refresh_data \
             --leagues nbl,d2,d3,d4,d5 \
-            --years 2026
+            --years 2026 \
+            --last-week
 
       - name: Commit updated data
         run: |
