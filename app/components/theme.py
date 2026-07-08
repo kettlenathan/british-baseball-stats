@@ -84,6 +84,13 @@ STAT_LABELS = {
     "avg_risp": "AVG w/RISP", "r_pg": "R/G", "ra_pg": "RA/G", "lob_pg": "LOB/G",
     "fps_pct": "First Pitch Strike%", "hitdistance": "Distance", "outcome": "Outcome",
     "game_date": "Date", "home_away": "Home/Away", "score": "Score", "result": "Result",
+    "observed_woba": "Observed wOBA", "shrunk_woba": "True Talent wOBA",
+    "observed_fip": "Observed FIP", "shrunk_fip": "True Talent FIP",
+    "reliability": "Reliability",
+    "pull_pct": "Pull%", "center_pct": "Center%", "oppo_pct": "Oppo%", "pull_minus_oppo": "Net Pull%",
+    "singles_pct": "1B%", "doubles_pct": "2B%", "triples_pct": "3B%", "hr_pct": "HR%",
+    "cluster": "Cluster", "cluster_label": "Archetype", "pc1": "Component 1", "pc2": "Component 2",
+    "count": "Players", "k": "k", "inertia": "Inertia", "silhouette": "Silhouette",
 }
 
 STAT_FORMAT = {
@@ -97,6 +104,11 @@ STAT_FORMAT = {
     "po": ",.0f", "a": ",.0f", "e": ",.0f", "dp": ",.0f", "fpct": ".3f",
     "avg_risp": ".3f", "r_pg": ".2f", "ra_pg": ".2f", "lob_pg": ".2f",
     "fps_pct": ".1%", "hitdistance": ",.0f",
+    "observed_woba": ".3f", "shrunk_woba": ".3f", "observed_fip": ".2f", "shrunk_fip": ".2f",
+    "reliability": ".0%",
+    "pull_pct": ".1%", "center_pct": ".1%", "oppo_pct": ".1%", "pull_minus_oppo": "+.1%",
+    "singles_pct": ".1%", "doubles_pct": ".1%", "triples_pct": ".1%", "hr_pct": ".1%",
+    "pc1": ".2f", "pc2": ".2f", "silhouette": ".3f", "inertia": ".1f",
 }
 
 

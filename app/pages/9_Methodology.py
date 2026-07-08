@@ -6,6 +6,11 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
 import streamlit as st
 
 from stats import constants
+from stats.shrinkage import (
+    FALLBACK_BATTING_STABILIZATION_PA,
+    FALLBACK_PITCHING_STABILIZATION_IP,
+    MIN_QUALIFYING_PLAYERS,
+)
 from stats.war import WAR_DISCLAIMER
 
 st.set_page_config(page_title="Methodology", page_icon="📖", layout="wide")
@@ -117,6 +122,42 @@ st.markdown(
 
 st.divider()
 
+st.subheader("True talent (empirical-Bayes shrinkage)")
+st.markdown(
+    "A batter with 15 PA and a .500 wOBA almost certainly isn't actually a .500 hitter — with "
+    "this few PA, most of that number is sampling noise. **True talent wOBA/FIP** regresses each "
+    "player's observed rate toward the league-season mean, weighted by how much playing time "
+    "they've actually had:"
+)
+st.latex(r"\text{shrunk} = \frac{n \cdot \text{observed} + k \cdot \text{league mean}}{n + k}")
+st.markdown(
+    "where `n` is PA (batters) or IP (pitchers), and `k` is a **stabilization point** — the "
+    "sample size at which observed and league-average performance are weighted equally. Rather "
+    "than borrowing a fixed published stabilization point, `k` is estimated from this "
+    "league-season's own player population: from the league-wide event rates, treating each "
+    "wOBA/FIP linear-weight event as an independent random process (a standard simplification "
+    "in stabilization-point research) gives an estimate of *within-player* sampling noise; "
+    "comparing that to the *actual* spread of observed rates across players (once enough players "
+    "clear a minimum sample) isolates the *between-player* \"true talent\" variance, and `k` "
+    "falls out as the ratio of the two."
+)
+st.markdown(
+    f"If a league-season's own data can't support that estimate — fewer than "
+    f"{MIN_QUALIFYING_PLAYERS} qualifying players, or the variance decomposition doesn't come "
+    "out positive, both plausible in a small amateur league-season — this falls back to a "
+    f"published stabilization point instead ({FALLBACK_BATTING_STABILIZATION_PA:.0f} PA for "
+    f"batters, {FALLBACK_PITCHING_STABILIZATION_IP:.0f} IP for pitchers, from FanGraphs/Russell "
+    "Carleton's stabilization research). Which path was used is shown alongside the shrunk value "
+    "wherever it's displayed."
+)
+st.markdown(
+    "This is applied to every player-season regardless of sample size — a player with zero PA "
+    "simply reduces to the league mean with 0% reliability, which is the point: the smallest "
+    "samples are exactly who benefits most from this adjustment."
+)
+
+st.divider()
+
 st.subheader("Batted-ball tendency, spray charts, matchups, and first-pitch-strike%")
 st.markdown(
     "This league's scorers don't record true batted-ball field coordinates or exit velocity "
@@ -168,6 +209,64 @@ st.markdown(
     "for both season and career scope. There's **no minimum plate-appearance threshold** — a "
     "single at-bat between two players shows up the same as a 20-at-bat history, so treat small "
     "samples with appropriate skepticism."
+)
+
+st.divider()
+
+st.subheader("Batter archetypes")
+st.markdown(
+    "The Batter Archetypes page groups batters within one league-season using unsupervised "
+    "clustering (k-means), based on **six** features: Net Pull% (Pull% minus Oppo%), BB%, K%, "
+    "and 2B%/3B%/HR% (each hit type as a share of total hits). Every feature is standardized "
+    "(z-scored) before clustering, since a raw-scale feature would otherwise dominate the "
+    "percentage-based ones."
+)
+st.markdown(
+    "**Why not more features**: earlier versions also included ISO, Center%, 1B%, and raw "
+    "Pull%/Oppo% as two separate features, but all were dropped as redundant. ISO is a weighted "
+    "recombination of the same doubles/triples/home-run events that 2B%/3B%/HR% already "
+    "describe at finer granularity — including both would let one underlying signal (power) "
+    "count twice toward clustering distance, silently outweighing plate discipline or spray "
+    "direction. Center% and 1B% are each the \"remainder\" share of a group that sums to 100% "
+    "(Pull/Center/Oppo; 1B/2B/3B/HR) — a fixed function of the other shares in its group, adding "
+    "collinearity without adding information; dropping one category per compositional group is "
+    "the standard treatment for this. Pull% and Oppo% go a step further: even with Center% "
+    "already dropped, the two remaining shares still only carry **one** real axis of variation "
+    "between them (how pulled a batter's contact is) — so they're combined into a single signed "
+    "Net Pull% feature instead of being kept as two separately-weighted, near-mirror-image ones. "
+    "ISO, Center%, and raw Pull%/Oppo% are still shown in the page's tables for context — they "
+    "just aren't clustering inputs."
+)
+st.markdown(
+    "**Choosing k**: rather than a fixed number of archetypes, k-means is fit across a range of "
+    "candidate k values and the one that maximizes mean silhouette score (a standard measure of "
+    "how well-separated the resulting clusters are) is picked automatically — visible in the "
+    "\"How k was chosen\" section of that page. **Archetype labels** (e.g. \"High HR%, High Net "
+    "Pull%\") are generated automatically from each cluster's two most extreme standardized "
+    "features, rather than drawn from a fixed, presumptuous taxonomy of hitter types."
+)
+st.markdown(
+    "**Reading the scatter plot**: clustering runs on the full 6-feature standardized space, not "
+    "the 2D plot itself — the plotted x/y position is a separate PCA projection computed purely "
+    "for visualization. Each axis is labeled with whichever features load most heavily onto it "
+    "(the same \"top features\" technique used for archetype labels above) rather than a bare "
+    "\"Component 1\"/\"Component 2\", so the plot reads as e.g. \"more Net Pull%\" left-to-right "
+    "instead of an unlabeled abstract axis — but position along an axis is still relative, not a "
+    "stat value in its own right."
+)
+st.markdown(
+    "**Batted-ball type (ground ball/fly ball/line drive/pop up) is deliberately not included** "
+    "in the feature set. This league's batted-ball hit-distance field is already known to be "
+    "unreliable (see the note above about negative distance values) — and any attempt to "
+    "classify batted-ball type from the source data's raw `hittype` code would lean on that same "
+    "distance field, since there's no other documentation of what the code actually means. The "
+    "extra-base-hit mix used instead is derived purely from already-reliable counting stats "
+    "(hits, doubles, triples, home runs), with no such dependency."
+)
+st.markdown(
+    "As with the matchup tables above, there's no minimum-sample-size filter beyond the page's "
+    "own PA slider — batters near that threshold still reflect noisy underlying rates, so "
+    "raising the minimum PA gives a cleaner read at the cost of a smaller population to cluster."
 )
 
 st.divider()

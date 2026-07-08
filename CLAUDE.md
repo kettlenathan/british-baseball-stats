@@ -32,7 +32,7 @@ uv run alembic revision --autogenerate -m "..."
 uv run alembic upgrade head
 ```
 
-The Data Admin page in the Streamlit app (`app/pages/7_Data_Admin.py`) also runs
+The Data Admin page in the Streamlit app (`app/pages/8_Data_Admin.py`) also runs
 `scripts.refresh_data` as a subprocess, so scraper changes are exercised from the UI too —
 this trigger is disabled when `IS_DEPLOYED` is set in `st.secrets` (see "Deployment" below).
 
@@ -151,6 +151,26 @@ writes back upstream.
   park factors. `WAR_DISCLAIMER` in this module is surfaced verbatim in the UI wherever WAR
   is shown — keep it accurate if the formula changes. `FORMULA_VERSION` in `constants.py`
   should be bumped if the formula changes, since it's stored alongside each computed WAR row.
+- `shrinkage.py` — empirical-Bayes "true talent" shrinkage of season wOBA/FIP toward the
+  league-season mean, weighted by PA/IP against a stabilization point (`k`) self-calibrated
+  from this league-season's own player-to-player variance (method-of-moments over a
+  Poisson-process approximation of within-player sampling noise), falling back to a published
+  stabilization constant when a league-season's own data can't support the estimate (too few
+  qualifying players, or the variance decomposition goes non-positive) — `k_self_calibrated`
+  on each row records which path was used. Writes `BattingTrueTalent`/`PitchingTrueTalent`,
+  one row per player-season, via the normal `stats/recompute.py` pipeline.
+- `archetypes.py` — unsupervised k-means clustering of batters into descriptive archetypes,
+  computed at read time (not materialized, unlike everything else in `stats/`) since it
+  depends on user-adjustable parameters (population scope, k) with no single fixed "correct"
+  value. Feature set is deliberately decorrelated: ISO, Center%, 1B%, and separate Pull%/Oppo%
+  are all excluded in favor of a smaller set (Net Pull% = Pull% − Oppo%, BB%, K%, 2B%, 3B%,
+  HR%) so no single underlying signal (e.g. power) is double-counted across multiple
+  collinear/compositional features — see the module docstring for the full reasoning. k is
+  chosen by maximizing mean silhouette score across a candidate range, not hardcoded; cluster
+  labels and scatter-plot PCA axis labels are both generated from the same "top dominant
+  features" logic (`_label_dominant_features`) rather than a fixed taxonomy or a bare
+  "Component 1"/"Component 2". Batted-ball type (ground/fly/line/pop) is excluded entirely —
+  see the `hittype` note above about that field's reliability.
 
 ### `app/`
 - Streamlit multipage app; `app/Home.py` is the entry point, but page registration/order/
@@ -162,7 +182,7 @@ writes back upstream.
 - `app/env.py` holds `is_deployed()`, the one shared signal for "running on the hosted
   Community Cloud deployment vs. locally" — reads an `IS_DEPLOYED` secret that's only ever
   set via the Community Cloud dashboard, never committed. `Home.py` uses it to decide whether
-  to include the Data Admin page in navigation at all; `7_Data_Admin.py` also checks it
+  to include the Data Admin page in navigation at all; `8_Data_Admin.py` also checks it
   directly as defense in depth.
 - `app/components/data_access.py` holds all `@st.cache_data`-wrapped DB-query functions
   returning pandas DataFrames. This layer only *displays* what `stats/` already derived —
@@ -196,18 +216,35 @@ writes back upstream.
   them side by side — batting and pitching career tables/trend charts for players, a
   win-pct-by-year trend for teams. Both reuse `charts.py`'s `trend_chart(..., color_col=...)`
   for the single-vs-multi-series overlay rather than branching in the page.
-- `app/pages/7_Data_Admin.py` runs the scraper/recompute pipeline as a subprocess from the
+- `app/pages/7_Batter_Archetypes.py` fits `stats/archetypes.py`'s k-means clustering for one
+  league-season, live at read time (via `data_access.batter_archetypes`, `@st.cache_data`
+  wrapped so a repeat visit with the same scope/min-PA doesn't refit). Shows a PCA-projected
+  scatter (axes labeled by dominant loading features, not "Component 1"/"2"), a silhouette-based
+  "how k was chosen" diagnostics table, a cluster-profile summary table (deliberately broader
+  than the clustering inputs — includes ISO/Center%/1B%/raw Pull%/Oppo% for descriptive context
+  even though they aren't clustering features), and a static reference expander mapping each
+  pairwise archetype dimension to a real, well-known MLB career.
+- `app/pages/8_Data_Admin.py` runs the scraper/recompute pipeline as a subprocess from the
   UI and shows recent `ScrapeLog` activity. Only reachable at all when `is_deployed()` is
   False (see above); its own live-refresh controls are additionally gated the same way.
-- `app/pages/8_Methodology.py` documents the wOBA/wRC+/FIP/ERA+/WAR formulas and what's
+- `app/pages/9_Methodology.py` documents the wOBA/wRC+/FIP/ERA+/WAR formulas and what's
   fixed (published linear weight coefficients, `stats/constants.py`) vs. self-calibrated per
   league-season (`stats/league_context.py`), plus the fixed-geometry pull-tendency/spray-chart
-  approximation, the first-pitch-strike% count-diffing method, and the matchup table's
-  no-minimum-sample-size caveat — keep it in sync if any of those modules' approach changes.
-- `app/pages/9_Feedback.py` files a GitHub issue against `config.GITHUB_FEEDBACK_REPO` via
+  approximation, the first-pitch-strike% count-diffing method, the matchup table's
+  no-minimum-sample-size caveat, the empirical-Bayes shrinkage formula (`stats/shrinkage.py`),
+  and the batter-archetype clustering feature set/exclusions (`stats/archetypes.py`) — keep it
+  in sync if any of those modules' approach changes.
+- `app/pages/10_Feedback.py` files a GitHub issue against `config.GITHUB_FEEDBACK_REPO` via
   the REST API, authenticated with a `GITHUB_TOKEN` secret (Community Cloud dashboard or a
   local `.streamlit/secrets.toml` for testing — never committed). Degrades to an explanatory
   message if the secret isn't configured, rather than failing.
+- Page order in `Home.py`'s `st.navigation()` list groups thematically rather than just
+  following filename numbers: overview (Home) → league-wide stat views (Leaderboards, Player
+  Explorer) → single-entity deep dives (Player Page, Team Page) → multi-entity analysis
+  (Player Comparison, Team Comparison, Batter Archetypes) → ops (Data Admin, dev-only,
+  spliced in via `pages.insert()`) → meta/reference (Methodology, Feedback). Filename number
+  prefixes are kept in sync with this display order purely so the directory listing itself
+  reads sensibly to a human browsing it — Streamlit itself only honors list order.
 
 ## Data refresh cadence
 
@@ -226,7 +263,7 @@ path (`scraper.pipeline.run()` then `stats.recompute.recompute_league_season()` 
   conflict can recur after a future migration.
 - CLI: `uv run python -m scripts.refresh_data --leagues <codes> --years <spec>
   [--force-refresh] [--last-week | --last-month]`
-- The Data Admin page's "Run refresh" button (`app/pages/7_Data_Admin.py`), which shells out
+- The Data Admin page's "Run refresh" button (`app/pages/8_Data_Admin.py`), which shells out
   to the identical command.
 
 `config.CACHE_TTL_CURRENT_SEASON_HOURS = 24` means a same-day, non-forced re-run mostly hits
@@ -284,7 +321,7 @@ The `IS_DEPLOYED` flag is set as a secret in the Community Cloud dashboard (neve
 `app/env.py:is_deployed()` reads it to both drop the Data Admin page from navigation entirely
 and (as defense in depth) gate its live-refresh controls if reached directly.
 
-The Feedback page (`app/pages/9_Feedback.py`) needs a `GITHUB_TOKEN` secret (a PAT or
+The Feedback page (`app/pages/10_Feedback.py`) needs a `GITHUB_TOKEN` secret (a PAT or
 fine-grained token with Issues: write access on `config.GITHUB_FEEDBACK_REPO`) to file
 submissions as GitHub issues — without it, the page shows a "not configured" message instead
 of failing. Deliberately doesn't write feedback to `data/stats.db`: local file writes aren't

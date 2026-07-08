@@ -4,7 +4,7 @@ import pytest
 
 from stats.advanced_stats import era_plus, fip, wrc_plus
 from stats.advanced_stats import woba as advanced_woba
-from stats.rate_stats import batting_rate_stats, outs_to_ip, outs_to_ip_display, pitching_rate_stats
+from stats.rate_stats import batting_rate_stats, hit_type_mix, outs_to_ip, outs_to_ip_display, pitching_rate_stats
 
 
 def make_batter(**overrides):
@@ -38,6 +38,20 @@ def test_batting_rate_stats_zero_ab_returns_none():
     assert result["obp"] is None
     assert result["slg"] is None
     assert result["bb_pct"] is None
+
+
+def test_hit_type_mix_hand_computed():
+    row = make_batter()  # h=4, doubles=1, triples=0, hr=1 -> 2 singles
+    result = hit_type_mix(row)
+    assert result["singles_pct"] == pytest.approx(2 / 4)
+    assert result["doubles_pct"] == pytest.approx(1 / 4)
+    assert result["triples_pct"] == pytest.approx(0 / 4)
+    assert result["hr_pct"] == pytest.approx(1 / 4)
+
+
+def test_hit_type_mix_zero_hits_returns_none():
+    row = make_batter(h=0, doubles=0, triples=0, hr=0)
+    assert hit_type_mix(row) is None
 
 
 def test_woba_hand_computed():

@@ -15,6 +15,7 @@ from db.models import LeagueSeason
 from stats.aggregation import aggregate_batting, aggregate_pitching
 from stats.league_context import compute_league_context
 from stats.matchups import compute_matchups
+from stats.shrinkage import compute_batting_true_talent, compute_pitching_true_talent
 from stats.spray import compute_batter_spray
 from stats.war import compute_batting_war, compute_pitching_war
 
@@ -23,6 +24,9 @@ def recompute_league_season(session: Session, league_season_id: int) -> None:
     aggregate_batting(session, league_season_id)
     aggregate_pitching(session, league_season_id)
     compute_league_context(session, league_season_id)
+    # True-talent shrinkage needs lg_woba/lg_fip from compute_league_context.
+    compute_batting_true_talent(session, league_season_id)
+    compute_pitching_true_talent(session, league_season_id)
     # compute_batter_spray and compute_matchups both only need
     # plate_appearances, not compute_league_context's output — order among
     # these three doesn't matter, they're just grouped here for one pass.

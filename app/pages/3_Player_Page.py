@@ -12,7 +12,9 @@ from app.components.data_access import (
     batter_pitcher_matchups_season,
     batter_spray_points,
     batter_tendency,
+    batting_true_talent,
     pitcher_spray_points,
+    pitching_true_talent,
     player_batting_career,
     player_league_seasons,
     player_pitching_career,
@@ -67,8 +69,31 @@ if not bat_df.empty:
         with col2:
             st.plotly_chart(trend_chart(bat_df, "year", "war"), use_container_width=True)
 
-    st.markdown("##### Batted-ball tendency")
     bat_scope_id, bat_scope_label = _scope_selector("bat_scope")
+
+    st.markdown("##### True talent (empirical-Bayes shrinkage)")
+    if bat_scope_id is None:
+        st.info(
+            "Select a specific season above to see shrinkage-adjusted wOBA — it shrinks "
+            "toward that season's own league mean, so it isn't defined at the career level."
+        )
+    else:
+        player_tt = batting_true_talent(bat_scope_id)
+        player_tt = player_tt[player_tt["player"] == player]
+        if player_tt.empty:
+            st.info("No true-talent estimate available for this season.")
+        else:
+            row = player_tt.iloc[0]
+            st.metric(
+                "True Talent wOBA",
+                f"{row['shrunk_woba']:.3f}",
+                help=(
+                    f"Observed {row['observed_woba']:.3f} over {int(row['pa'])} PA "
+                    f"(reliability {row['reliability']:.0%})"
+                ),
+            )
+
+    st.markdown("##### Batted-ball tendency")
     tendency = batter_tendency(player, bat_scope_id)
     if tendency is None:
         st.info(
@@ -120,8 +145,31 @@ if not pitch_df.empty:
         with col2:
             st.plotly_chart(trend_chart(pitch_df, "year", "war"), use_container_width=True)
 
-    st.markdown("##### Spray chart against")
     pitch_scope_id, pitch_scope_label = _scope_selector("pitch_scope")
+
+    st.markdown("##### True talent (empirical-Bayes shrinkage)")
+    if pitch_scope_id is None:
+        st.info(
+            "Select a specific season above to see shrinkage-adjusted FIP — it shrinks "
+            "toward that season's own league mean, so it isn't defined at the career level."
+        )
+    else:
+        player_tt = pitching_true_talent(pitch_scope_id)
+        player_tt = player_tt[player_tt["player"] == player]
+        if player_tt.empty:
+            st.info("No true-talent estimate available for this season.")
+        else:
+            row = player_tt.iloc[0]
+            st.metric(
+                "True Talent FIP",
+                f"{row['shrunk_fip']:.2f}",
+                help=(
+                    f"Observed {row['observed_fip']:.2f} over {row['ip']:.1f} IP "
+                    f"(reliability {row['reliability']:.0%})"
+                ),
+            )
+
+    st.markdown("##### Spray chart against")
     hand_choice = st.radio("Vs.", ["All", "vs LHB", "vs RHB"], horizontal=True, key="pitch_hand")
     vs_hand = {"All": None, "vs LHB": "L", "vs RHB": "R"}[hand_choice]
     pitch_spray_df = pitcher_spray_points(player, pitch_scope_id, vs_hand)

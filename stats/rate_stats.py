@@ -75,6 +75,22 @@ def batting_rate_stats(row: Any) -> dict[str, float | None]:
     }
 
 
+def hit_type_mix(row: Any) -> dict[str, float] | None:
+    """row: a BattingSeasonStats instance or equivalent (h, doubles, triples,
+    hr). Returns each hit type as a fraction of total hits, for use as
+    batter-archetype clustering features — None when the player has no hits
+    to compute a mix from."""
+    if not row.h:
+        return None
+    singles = row.h - row.doubles - row.triples - row.hr
+    return {
+        "singles_pct": singles / row.h,
+        "doubles_pct": row.doubles / row.h,
+        "triples_pct": row.triples / row.h,
+        "hr_pct": row.hr / row.h,
+    }
+
+
 def pitching_rate_stats(row: Any) -> dict[str, float | None]:
     """row: a PitchingSeasonStats instance or equivalent (outs_recorded, h,
     r, er, bb, so)."""

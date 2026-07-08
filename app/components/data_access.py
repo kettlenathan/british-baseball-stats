@@ -15,12 +15,14 @@ from db.models import (
     BatterPitcherMatchup,
     BatterSpraySeasonStats,
     BattingSeasonStats,
+    BattingTrueTalent,
     BattingWar,
     Game,
     League,
     LeagueSeason,
     LeagueSeasonContext,
     PitchingSeasonStats,
+    PitchingTrueTalent,
     PitchingWar,
     PlateAppearance,
     Player,
@@ -31,7 +33,17 @@ from db.models import (
 )
 from stats.advanced_stats import era_plus, fip, wrc_plus
 from stats.advanced_stats import woba as compute_woba
-from stats.rate_stats import avg, avg_risp, batting_rate_stats, fielding_pct, fps_pct, outs_to_ip_display, pitching_rate_stats
+from stats.archetypes import fit_archetypes, k_diagnostics
+from stats.rate_stats import (
+    avg,
+    avg_risp,
+    batting_rate_stats,
+    fielding_pct,
+    fps_pct,
+    hit_type_mix,
+    outs_to_ip_display,
+    pitching_rate_stats,
+)
 
 # Tier order for every league dropdown in the app — top division to
 # bottom, not alphabetical (alphabetical would put d2 before nbl). Any
@@ -183,6 +195,139 @@ def pitching_leaderboard(league_season_id: int, min_ip: float = 0) -> pd.DataFra
         return pd.DataFrame(records)
     finally:
         session.close()
+
+
+@st.cache_data
+def batting_true_talent(league_season_id: int, min_pa: int = 0) -> pd.DataFrame:
+    """Empirical-Bayes shrunk wOBA per batter for one league_season — see
+    stats/shrinkage.py."""
+    session = get_session()
+    try:
+        rows = session.execute(
+            select(BattingTrueTalent, Player.full_name, TeamSeason.display_name)
+            .join(PlayerSeason, PlayerSeason.id == BattingTrueTalent.player_season_id)
+            .join(Player, Player.id == PlayerSeason.player_id)
+            .join(TeamSeason, TeamSeason.id == PlayerSeason.team_season_id)
+            .where(TeamSeason.league_season_id == league_season_id, BattingTrueTalent.pa >= min_pa)
+        ).all()
+
+        records = [
+            {
+                "player": full_name,
+                "team": team_name,
+                "pa": row.pa,
+                "observed_woba": row.observed_woba,
+                "shrunk_woba": row.shrunk_woba,
+                "reliability": row.reliability,
+                "stabilization_pa": row.stabilization_pa,
+                "k_self_calibrated": row.k_self_calibrated,
+            }
+            for row, full_name, team_name in rows
+        ]
+        return pd.DataFrame(records)
+    finally:
+        session.close()
+
+
+@st.cache_data
+def pitching_true_talent(league_season_id: int, min_ip: float = 0.0) -> pd.DataFrame:
+    """Empirical-Bayes shrunk FIP per pitcher for one league_season — see
+    stats/shrinkage.py."""
+    session = get_session()
+    try:
+        rows = session.execute(
+            select(PitchingTrueTalent, Player.full_name, TeamSeason.display_name)
+            .join(PlayerSeason, PlayerSeason.id == PitchingTrueTalent.player_season_id)
+            .join(Player, Player.id == PlayerSeason.player_id)
+            .join(TeamSeason, TeamSeason.id == PlayerSeason.team_season_id)
+            .where(TeamSeason.league_season_id == league_season_id, PitchingTrueTalent.ip >= min_ip)
+        ).all()
+
+        records = [
+            {
+                "player": full_name,
+                "team": team_name,
+                "ip": row.ip,
+                "observed_fip": row.observed_fip,
+                "shrunk_fip": row.shrunk_fip,
+                "reliability": row.reliability,
+                "stabilization_ip": row.stabilization_ip,
+                "k_self_calibrated": row.k_self_calibrated,
+            }
+            for row, full_name, team_name in rows
+        ]
+        return pd.DataFrame(records)
+    finally:
+        session.close()
+
+
+@st.cache_data
+def batter_archetype_inputs(league_season_id: int, min_pa: int = 20) -> pd.DataFrame:
+    """Feature vector for batter-archetype clustering (stats/archetypes.py):
+    spray tendency (pull/center/oppo %), rate stats (ISO/BB%/K%), and
+    extra-base-hit mix (1B/2B/3B/HR%), for every batter in one league_season
+    with at least min_pa PA and spray data (excludes switch hitters, same as
+    batter_tendency, since there's no per-PA batting-side record to bucket
+    them by)."""
+    session = get_session()
+    try:
+        rows = session.execute(
+            select(BattingSeasonStats, BatterSpraySeasonStats, Player.full_name, TeamSeason.display_name)
+            .join(PlayerSeason, PlayerSeason.id == BattingSeasonStats.player_season_id)
+            .join(Player, Player.id == PlayerSeason.player_id)
+            .join(TeamSeason, TeamSeason.id == PlayerSeason.team_season_id)
+            .join(
+                BatterSpraySeasonStats,
+                BatterSpraySeasonStats.player_season_id == BattingSeasonStats.player_season_id,
+            )
+            .where(TeamSeason.league_season_id == league_season_id, BattingSeasonStats.pa >= min_pa)
+        ).all()
+
+        records = []
+        for stats_row, spray_row, full_name, team_name in rows:
+            mix = hit_type_mix(stats_row)
+            spray_total = spray_row.pull_count + spray_row.center_count + spray_row.oppo_count
+            rate = batting_rate_stats(stats_row)
+            if mix is None or not spray_total or None in (rate["iso"], rate["bb_pct"], rate["k_pct"]):
+                continue
+            records.append(
+                {
+                    "player": full_name,
+                    "team": team_name,
+                    "pa": stats_row.pa,
+                    "pull_pct": spray_row.pull_count / spray_total,
+                    "center_pct": spray_row.center_count / spray_total,
+                    "oppo_pct": spray_row.oppo_count / spray_total,
+                    "iso": rate["iso"],
+                    "bb_pct": rate["bb_pct"],
+                    "k_pct": rate["k_pct"],
+                    **mix,
+                }
+            )
+        return pd.DataFrame(records)
+    finally:
+        session.close()
+
+
+@st.cache_data
+def batter_archetypes(league_season_id: int, min_pa: int = 20, k: int | None = None) -> pd.DataFrame:
+    """Fits batter archetypes (stats/archetypes.py) over
+    batter_archetype_inputs' feature vector — the one place sklearn gets
+    invoked from the app layer."""
+    df = batter_archetype_inputs(league_season_id, min_pa=min_pa)
+    if df.empty:
+        return df
+    return fit_archetypes(df, k=k)
+
+
+@st.cache_data
+def batter_archetype_k_diagnostics(league_season_id: int, min_pa: int = 20) -> pd.DataFrame:
+    """Silhouette/inertia diagnostics across candidate k values, for a "how
+    was k chosen" display — see stats/archetypes.py."""
+    df = batter_archetype_inputs(league_season_id, min_pa=min_pa)
+    if df.empty:
+        return df
+    return k_diagnostics(df)
 
 
 @st.cache_data

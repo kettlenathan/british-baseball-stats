@@ -435,6 +435,48 @@ class PitchingWar(Base):
     computed_at: Mapped[dt.datetime] = mapped_column(DateTime, default=_now)
 
 
+class BattingTrueTalent(Base):
+    """Empirical-Bayes shrinkage of season wOBA toward the league-season
+    mean, weighted by PA against a stabilization point self-calibrated from
+    this league-season's own player-to-player variance (see
+    stats/shrinkage.py) — falls back to a published stabilization-point
+    constant when the league-season's own data can't support the estimate
+    (k_self_calibrated distinguishes which path was used)."""
+
+    __tablename__ = "batting_true_talent"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    player_season_id: Mapped[int] = mapped_column(
+        ForeignKey("player_seasons.id"), unique=True, index=True
+    )
+    pa: Mapped[int] = mapped_column(Integer, default=0)
+    observed_woba: Mapped[float | None] = mapped_column(Float, nullable=True)
+    shrunk_woba: Mapped[float | None] = mapped_column(Float, nullable=True)
+    reliability: Mapped[float | None] = mapped_column(Float, nullable=True)
+    stabilization_pa: Mapped[float | None] = mapped_column(Float, nullable=True)
+    k_self_calibrated: Mapped[bool] = mapped_column(Boolean, default=False)
+    computed_at: Mapped[dt.datetime] = mapped_column(DateTime, default=_now)
+
+
+class PitchingTrueTalent(Base):
+    """Pitching-side counterpart to BattingTrueTalent, shrinking FIP toward
+    the league-season mean weighted by IP — see stats/shrinkage.py."""
+
+    __tablename__ = "pitching_true_talent"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    player_season_id: Mapped[int] = mapped_column(
+        ForeignKey("player_seasons.id"), unique=True, index=True
+    )
+    ip: Mapped[float] = mapped_column(Float, default=0.0)
+    observed_fip: Mapped[float | None] = mapped_column(Float, nullable=True)
+    shrunk_fip: Mapped[float | None] = mapped_column(Float, nullable=True)
+    reliability: Mapped[float | None] = mapped_column(Float, nullable=True)
+    stabilization_ip: Mapped[float | None] = mapped_column(Float, nullable=True)
+    k_self_calibrated: Mapped[bool] = mapped_column(Boolean, default=False)
+    computed_at: Mapped[dt.datetime] = mapped_column(DateTime, default=_now)
+
+
 class BatterSpraySeasonStats(Base):
     """Season-level pull/center/oppo tendency for one batter, bucketed
     against fixed thirds of the true 90-degree fair-territory fan (see

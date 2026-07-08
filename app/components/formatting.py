@@ -18,6 +18,11 @@ _FORMATTED_COLS = {
     "era": "%.2f", "whip": "%.2f", "k9": "%.1f", "bb9": "%.1f", "fip": "%.2f",
     "era_plus": "%.0f", "ip": "%.1f", "fpct": "%.3f", "avg_risp": "%.3f",
     "fps_pct": "percent", "pct": "%.3f", "r_pg": "%.2f", "ra_pg": "%.2f", "lob_pg": "%.2f",
+    "observed_woba": "%.3f", "shrunk_woba": "%.3f", "observed_fip": "%.2f", "shrunk_fip": "%.2f",
+    "reliability": "percent",
+    "pull_pct": "percent", "center_pct": "percent", "oppo_pct": "percent", "pull_minus_oppo": "percent",
+    "singles_pct": "percent", "doubles_pct": "percent", "triples_pct": "percent", "hr_pct": "percent",
+    "pc1": "%.2f", "pc2": "%.2f", "silhouette": "%.3f", "inertia": "%.1f",
 }
 
 
@@ -60,6 +65,28 @@ TEAM_COLUMN_CONFIG = _build(
         "era", "whip", "fip", "era_plus", "war",
     ]
 )
+
+TRUE_TALENT_BATTING_COLUMN_CONFIG = _build(["player", "team", "pa", "observed_woba", "shrunk_woba", "reliability"])
+
+TRUE_TALENT_PITCHING_COLUMN_CONFIG = _build(["player", "team", "ip", "observed_fip", "shrunk_fip", "reliability"])
+
+ARCHETYPE_COLUMN_CONFIG = _build(
+    [
+        "player", "team", "cluster_label", "pa",
+        "pull_pct", "center_pct", "oppo_pct", "pull_minus_oppo", "iso", "bb_pct", "k_pct",
+        "singles_pct", "doubles_pct", "triples_pct", "hr_pct",
+    ]
+)
+
+ARCHETYPE_PROFILE_COLUMN_CONFIG = _build(
+    [
+        "cluster_label", "count",
+        "pull_pct", "center_pct", "oppo_pct", "pull_minus_oppo", "iso", "bb_pct", "k_pct",
+        "singles_pct", "doubles_pct", "triples_pct", "hr_pct",
+    ]
+)
+
+ARCHETYPE_DIAGNOSTICS_COLUMN_CONFIG = _build(["k", "inertia", "silhouette"])
 
 ROSTER_COLUMN_CONFIG = _build(["player", "position", "jersey_number"])
 
