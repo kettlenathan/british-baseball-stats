@@ -20,9 +20,6 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-          
       - name: Install uv
         uses: astral-sh/setup-uv@v5
 
@@ -34,6 +31,17 @@ jobs:
       - name: Install dependencies
         run: uv sync
 
+      # Must run before alembic: a fresh checkout has no local data/stats.db
+      # at all, and SQLite auto-creates an empty file the moment anything
+      # connects to that path — including alembic itself. Fetching the real
+      # published snapshot first means alembic upgrades *that*, not a blank
+      # database that would otherwise get published over the real data.
+      - name: Fetch latest published data
+        run: uv run python -m scripts.pull_latest_db
+
+      - name: Apply pending migrations
+        run: uv run alembic upgrade head
+
       - name: Refresh data
         run: |
           uv run python -m scripts.refresh_data \
@@ -41,11 +49,7 @@ jobs:
             --years 2026 \
             --last-week
 
-      - name: Commit updated data
-        run: |
-          git config --global user.name "github-actions"
-          git config --global user.email "github-actions@github.com"
-
-          git add data/
-          git commit -m "Weekly data refresh" || exit 0
-          git push
+      - name: Publish data
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: uv run python -m scripts.publish_db

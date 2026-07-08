@@ -1,12 +1,10 @@
-"""Shared helpers for telling a local run apart from the hosted deployment."""
+"""Shared helpers for telling a local run apart from the hosted deployment.
 
-import streamlit as st
+is_deployed() itself now lives in config.py, since db/storage.py needs the
+same signal and db/ must not depend on app/ — re-exported here so existing
+`from app.env import is_deployed` call sites in app/ don't need to change.
+"""
 
+from config import is_deployed
 
-def is_deployed() -> bool:
-    """True only when the Community Cloud dashboard's Secrets box sets
-    IS_DEPLOYED = true. Never set locally, so local runs always see False."""
-    try:
-        return bool(st.secrets.get("IS_DEPLOYED", False))
-    except Exception:
-        return False
+__all__ = ["is_deployed"]

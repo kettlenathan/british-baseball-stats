@@ -6,13 +6,13 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
 import httpx
 import streamlit as st
 
-from config import GITHUB_FEEDBACK_REPO
+from config import GITHUB_REPO
 
 st.set_page_config(page_title="Feedback", page_icon="💬", layout="wide")
 st.title("Feedback / Bug Report")
 st.caption(
     "Spotted a bug, a wrong-looking stat, or have a feature request? Submit it below — it "
-    f"files an issue directly on the project's GitHub repo ({GITHUB_FEEDBACK_REPO})."
+    f"files an issue directly on the project's GitHub repo ({GITHUB_REPO})."
 )
 
 LABELS = {
@@ -58,7 +58,7 @@ else:
 
         try:
             response = httpx.post(
-                f"https://api.github.com/repos/{GITHUB_FEEDBACK_REPO}/issues",
+                f"https://api.github.com/repos/{GITHUB_REPO}/issues",
                 headers={
                     "Authorization": f"Bearer {token}",
                     "Accept": "application/vnd.github+json",

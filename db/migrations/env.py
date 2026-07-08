@@ -20,6 +20,14 @@ if config.config_file_name is not None:
 
 from config import DB_URL
 from db.models import Base
+from db.storage import ensure_db_present
+
+# Must happen before anything below connects to DB_URL: on a fresh clone (or
+# a fresh CI checkout) there's no local data/stats.db yet, and SQLite
+# auto-creates an empty file the moment any connection touches that path —
+# including alembic's own engine. Fetching the real published snapshot
+# first means migrations apply to *that*, not a blank database.
+ensure_db_present()
 
 target_metadata = Base.metadata
 config.set_main_option("sqlalchemy.url", DB_URL)

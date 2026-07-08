@@ -113,6 +113,10 @@ writes back upstream.
   Convert with `stats/rate_stats.py:outs_to_ip` for display/formulas.
 - `upsert.py` is the one path all scraper/stats writes go through: insert-or-update keyed on
   a unique constraint, so every ingestion function is idempotent by construction.
+- `storage.py` fetches/publishes `data/stats.db` itself as a GitHub Release asset rather than a
+  git-tracked file — see "Deployment" below for the full rationale and behavior.
+  `engine.py`/`migrations/env.py` both call its `ensure_db_present()` before touching
+  `config.DB_URL`, so the file is always there before anything else runs.
 
 ### `stats/`
 - `recompute.py` orchestrates the derivation pipeline in dependency order: aggregation
@@ -234,7 +238,7 @@ writes back upstream.
   no-minimum-sample-size caveat, the empirical-Bayes shrinkage formula (`stats/shrinkage.py`),
   and the batter-archetype clustering feature set/exclusions (`stats/archetypes.py`) — keep it
   in sync if any of those modules' approach changes.
-- `app/pages/10_Feedback.py` files a GitHub issue against `config.GITHUB_FEEDBACK_REPO` via
+- `app/pages/10_Feedback.py` files a GitHub issue against `config.GITHUB_REPO` via
   the REST API, authenticated with a `GITHUB_TOKEN` secret (Community Cloud dashboard or a
   local `.streamlit/secrets.toml` for testing — never committed). Degrades to an explanatory
   message if the secret isn't configured, rather than failing.
@@ -252,19 +256,18 @@ Refresh runs both on a schedule and on demand — three triggers, all ending at 
 path (`scraper.pipeline.run()` then `stats.recompute.recompute_league_season()` per touched
 `league_season_id`, via `scripts/refresh_data.py`):
 - **`.github/workflows/main.yml`** — a GitHub Actions cron job, Sundays 21:00 UK time
-  (`0 20 * * 0` UTC) plus manual `workflow_dispatch`. Runs `uv sync` then `scripts.refresh_data`
-  windowed with `--last-week` (see below) for every league, commits the resulting `data/stats.db`
-  as `github-actions`, and pushes straight to `main` — there's no PR/review step, so a bad scrape
-  commits directly. It does **not** run `alembic upgrade head` first; it relies on the
-  already-committed `data/stats.db` already carrying the current schema, so any schema-changing
-  migration must be applied and committed locally *before* the next scheduled run (see
-  "Deployment" below) — a run against the old pre-plate-appearances schema already produced one
-  divergent auto-commit that had to be reconciled by hand when merging, and the same class of
-  conflict can recur after a future migration.
+  (`0 20 * * 0` UTC) plus manual `workflow_dispatch`. Runs `uv sync`, then `scripts.pull_latest_db`
+  (fetches the currently-published `data/stats.db` — the checkout itself never has this file, see
+  "Deployment" below), then `alembic upgrade head` (so a schema migration merged since the last
+  publish gets applied automatically rather than requiring a human to remember to publish first),
+  then `scripts.refresh_data` windowed with `--last-week` (see below) for every league, then
+  `scripts.publish_db` to push the result back out as the release asset. No PR/review step, so a
+  bad scrape publishes directly — same tradeoff as the old commit-straight-to-`main` design, just
+  without the git-history growth (see "Deployment" below for why that changed).
 - CLI: `uv run python -m scripts.refresh_data --leagues <codes> --years <spec>
   [--force-refresh] [--last-week | --last-month]`
 - The Data Admin page's "Run refresh" button (`app/pages/8_Data_Admin.py`), which shells out
-  to the identical command.
+  to the identical command (its own separate "Publish data" button handles publishing).
 
 `config.CACHE_TTL_CURRENT_SEASON_HOURS = 24` means a same-day, non-forced re-run mostly hits
 the raw-HTML cache rather than re-scraping the live site; historical seasons are cached
@@ -290,21 +293,34 @@ uv run python -m scripts.refresh_data --leagues nbl,d2,d3,d4,d5 --years 2026 --l
 
 ## Deployment
 
-The app is deployed to Streamlit Community Cloud as a **read-only** consumer of a committed,
-pre-built `data/stats.db` — the live scraper never runs on the deployed instance (ephemeral
-filesystem, no auth, blocking requests make that unsafe there). Data collection stays exactly
-the process above, run locally; the only addition is committing the result:
+The app is deployed to Streamlit Community Cloud as a **read-only** consumer of `data/stats.db`
+— the live scraper never runs on the deployed instance (ephemeral filesystem, no auth, blocking
+requests make that unsafe there). Data collection stays exactly the process above, run locally;
+the only addition is publishing the result:
 
-1. `uv run alembic upgrade head` — ensure the DB about to be committed has the current schema.
+1. `uv run alembic upgrade head` — ensure the DB about to be published has the current schema.
 2. `uv run python -m scripts.refresh_data --leagues nbl,d2,d3,d4,d5 --years 2026` — let it
    exit normally so SQLite's WAL checkpoints cleanly (an abrupt kill can leave `data/stats.db`
-   mid-transaction relative to its `-wal` file, which `.gitignore` excludes from commits).
-3. `git add data/stats.db` and commit/push — Community Cloud auto-redeploys on push.
+   mid-transaction relative to its `-wal` file).
+3. `GITHUB_TOKEN=<a PAT with contents:write> uv run python -m scripts.publish_db`.
 
-`data/stats.db` is tracked in git (`.gitignore` un-ignores just that file; `data/raw_cache/`
-and WAL sidecars stay ignored). Since SQLite files aren't diff-friendly, each commit stores a
-full new blob — fine at the current ~10MB size, but reconsider (Git LFS or an external store)
-if it grows past roughly 50-100MB.
+`data/stats.db` is **not** tracked in git (`.gitignore` ignores all of `data/*`) — it's
+published as the single asset on a persistently-reused GitHub Release instead (`db/storage.py`,
+tag `data-latest`), replaced in place on every refresh rather than versioned per-refresh. This
+replaced committing the file directly: since SQLite files aren't diff-friendly, every commit
+used to store a near-full new blob (~50MB), so `.git` itself grew by roughly that much on every
+single weekly refresh regardless of how much data actually changed — 9 commits alone had already
+pushed the repo to 141MB before this changed. `db/engine.py` and `db/migrations/env.py` both call
+`db/storage.py:ensure_db_present()` before touching `config.DB_URL`, which downloads the current
+release asset if `data/stats.db` is missing locally at all (a fresh clone, or the deployed app's
+ephemeral filesystem on cold start) — downloads are unauthenticated since this repo is public.
+Once a local copy exists, it is **never** silently overwritten just because time has passed
+(would risk clobbering an in-progress local scrape/recompute that hasn't been published yet);
+only a deployed instance (`config.is_deployed()`) re-checks periodically (every
+`db.storage.STALE_AFTER_HOURS`) for a newer published snapshot, since a long-lived deployed
+container would otherwise never see new data between redeploys. `scripts/pull_latest_db.py` is
+the explicit opt-in for "throw away my local copy and sync to the published one" when you do
+want that.
 
 Community Cloud installs from `requirements.txt` (it doesn't reliably support this repo's
 PEP 621 `pyproject.toml`/`uv.lock` — it assumes Poetry format for `pyproject.toml` and doesn't
@@ -318,15 +334,20 @@ it locally) precisely so the default export above — and the deployed install �
 it's only used by the one-off spike in `scraper/recon/`, not the runtime pipeline or app.
 
 The `IS_DEPLOYED` flag is set as a secret in the Community Cloud dashboard (never committed);
-`app/env.py:is_deployed()` reads it to both drop the Data Admin page from navigation entirely
-and (as defense in depth) gate its live-refresh controls if reached directly.
+`config.is_deployed()` (re-exported as `app/env.py:is_deployed()` for existing `app/` call sites)
+reads it to both drop the Data Admin page from navigation entirely and (as defense in depth)
+gate its live-refresh controls if reached directly — `db/storage.py` also uses it directly
+(without going through `app/`, since `db/` must not depend on `app/`) to decide whether it's
+safe to auto-refresh a stale local `data/stats.db` (see above).
 
 The Feedback page (`app/pages/10_Feedback.py`) needs a `GITHUB_TOKEN` secret (a PAT or
-fine-grained token with Issues: write access on `config.GITHUB_FEEDBACK_REPO`) to file
-submissions as GitHub issues — without it, the page shows a "not configured" message instead
-of failing. Deliberately doesn't write feedback to `data/stats.db`: local file writes aren't
-reliably persistent on Community Cloud (a reboot or redeploy can silently drop them), so
-anything that needs to survive is sent to GitHub instead.
+fine-grained token with Issues: write access on `config.GITHUB_REPO`) to file submissions as
+GitHub issues — without it, the page shows a "not configured" message instead of failing.
+Deliberately doesn't write feedback to `data/stats.db`: local file writes aren't reliably
+persistent on Community Cloud (a reboot or redeploy can silently drop them), so anything that
+needs to survive is sent to GitHub instead. Note this is a different `GITHUB_TOKEN` from the one
+`scripts/publish_db.py` reads (an OS environment variable, not a Streamlit secret) — same name,
+different mechanism, since one runs inside the Streamlit app and the other is a plain CLI script.
 
 **Usage tracking** uses Community Cloud's own built-in analytics (viewer/visit counts, in the
 app's dashboard under "Analytics") rather than anything built into the app — no in-app

@@ -1,3 +1,4 @@
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -11,6 +12,7 @@ from sqlalchemy import select
 from app.env import is_deployed
 from db.engine import get_session
 from db.models import ScrapeLog
+from db.storage import publish
 from scraper.discovery import SENIOR_LEAGUE_CODES
 
 st.set_page_config(page_title="Data Admin", page_icon="🛠️", layout="wide")
@@ -21,8 +23,8 @@ st.subheader("Run scraper + recompute stats")
 if is_deployed():
     st.info(
         "Live data refresh is disabled on the hosted deployment. Data is updated by "
-        "committing a refreshed `data/stats.db` from a local run — see CLAUDE.md's "
-        "'Data refresh cadence' section."
+        "publishing a refreshed `data/stats.db` to the GitHub Release from a local run — "
+        "see CLAUDE.md's 'Data refresh cadence' section."
     )
 else:
     col1, col2 = st.columns(2)
@@ -63,6 +65,23 @@ else:
             st.cache_data.clear()
         else:
             st.error(f"Refresh failed (exit code {result.returncode}).")
+
+    st.divider()
+    st.subheader("Publish data")
+    token = os.environ.get("GITHUB_TOKEN")
+    if not token:
+        st.info(
+            "Publishing needs a `GITHUB_TOKEN` environment variable with `contents: write` "
+            "on the repo (a personal access token — set it before launching Streamlit, e.g. "
+            "`GITHUB_TOKEN=... uv run streamlit run app/Home.py`)."
+        )
+    elif st.button("Publish local data/stats.db to the GitHub Release"):
+        with st.spinner("Uploading data/stats.db ..."):
+            try:
+                publish(token=token)
+                st.success("Published.")
+            except Exception as exc:
+                st.error(f"Publish failed: {exc}")
 
 st.divider()
 st.subheader("Recent scrape activity")

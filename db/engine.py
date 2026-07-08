@@ -5,6 +5,12 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from config import DB_URL
 from db.models import Base
+from db.storage import ensure_db_present
+
+# Fetches data/stats.db from its GitHub Release if it's missing locally
+# (a fresh clone, or the deployed app's ephemeral filesystem) before the
+# engine touches it at all — see db/storage.py for the full behavior.
+ensure_db_present()
 
 engine = create_engine(DB_URL)
 
