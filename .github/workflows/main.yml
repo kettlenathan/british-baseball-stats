@@ -16,18 +16,30 @@ permissions:
 
 jobs:
   refresh:
-    runs-on: ubuntu-latest
+    # Self-hosted runner: stats.britishbaseball.org.uk started 403-blocking
+    # GitHub-hosted (datacenter) runner IPs the week of 2026-07-19, so this
+    # job must originate from a residential connection. One-time setup on the
+    # machine that will run it (repo Settings → Actions → Runners → "New
+    # self-hosted runner" shows the exact commands with a fresh token):
+    #
+    #   ./config.sh --url https://github.com/kettlenathan/british-baseball-stats --token <token>
+    #   sudo ./svc.sh install && sudo ./svc.sh start   # run as a service so reboots don't kill it
+    #
+    # If the runner is offline at 21:00 on a Sunday, the run queues and then
+    # fails once GitHub times it out — same "red run, no publish" outcome as
+    # any other failure, and the next week's --last-month window covers the gap.
+    runs-on: [self-hosted, linux]
+    timeout-minutes: 120
 
     steps:
       - uses: actions/checkout@v4
       - name: Install uv
         uses: astral-sh/setup-uv@v5
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.13'
-
+      # No actions/setup-python here (the hosted-runner version had it): a
+      # bare self-hosted machine lacks the hosted tool cache that action
+      # relies on, and uv sync downloads its own managed CPython matching
+      # .python-version (3.13) anyway.
       - name: Install dependencies
         run: uv sync
 
