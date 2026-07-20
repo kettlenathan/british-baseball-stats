@@ -302,7 +302,24 @@ the only addition is publishing the result:
 2. `uv run python -m scripts.refresh_data --leagues nbl,d2,d3,d4,d5 --years 2026` — let it
    exit normally so SQLite's WAL checkpoints cleanly (an abrupt kill can leave `data/stats.db`
    mid-transaction relative to its `-wal` file).
-3. `GITHUB_TOKEN=<a PAT with contents:write> uv run python -m scripts.publish_db`.
+3. `uv run python -m scripts.publish_db` — needs a `GITHUB_TOKEN` with `contents: write`,
+   normally supplied by the local `.env` (below).
+
+### Local secrets: `.env`
+
+`config.py` calls `load_dotenv(BASE_DIR / ".env")` at import time, and every entry point that
+reads a secret imports `config` (directly, or transitively via `db/storage.py`), so that one
+call covers the CLI scripts and the Streamlit app alike. `.env` is gitignored; `.env.example`
+is the committed template documenting each key and where to create it.
+
+Real environment variables take precedence — `load_dotenv` does not override an already-set
+variable — so GitHub Actions' own injected `GITHUB_TOKEN` still wins in
+`.github/workflows/main.yml`, and the deployed Community Cloud app (no `.env` present) is
+unaffected. `python-dotenv` is a plain runtime dependency rather than a dev-only one for
+exactly that reason: the import must not fail in environments that have no `.env` to read.
+
+Do **not** keep `.env` in a cloud-synced directory (OneDrive, Dropbox) — that copies the token
+off the machine. Keep the working copy of this repo on local disk.
 
 `data/stats.db` is **not** tracked in git (`.gitignore` ignores all of `data/*`) — it's
 published as the single asset on a persistently-reused GitHub Release instead (`db/storage.py`,

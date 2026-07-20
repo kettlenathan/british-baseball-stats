@@ -102,6 +102,8 @@ pydeck==0.9.3
     # via streamlit
 python-dateutil==2.9.0.post0
     # via pandas
+python-dotenv==1.2.2
+    # via british-baseball-stats
 python-multipart==0.0.32
     # via streamlit
 referencing==0.37.0

@@ -2,7 +2,20 @@
 
 from pathlib import Path
 
+from dotenv import load_dotenv
+
 BASE_DIR = Path(__file__).resolve().parent
+
+# Local secrets — currently just the GITHUB_TOKEN that scripts/publish_db.py
+# and the Data Admin page's "Publish data" button need — are read from an
+# untracked .env beside this file. Every entry point that touches those
+# secrets imports config (directly or via db/storage.py), so loading here is
+# the single chokepoint. Real environment variables win: load_dotenv doesn't
+# override an already-set variable, so GitHub Actions' own injected
+# GITHUB_TOKEN still takes precedence in CI, and the deployed app — which has
+# no .env at all — is unaffected either way.
+load_dotenv(BASE_DIR / ".env")
+
 DATA_DIR = BASE_DIR / "data"
 RAW_CACHE_DIR = DATA_DIR / "raw_cache"
 DB_PATH = DATA_DIR / "stats.db"
