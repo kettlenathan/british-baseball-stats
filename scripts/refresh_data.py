@@ -7,6 +7,7 @@ Usage:
 """
 
 import argparse
+import sys
 
 from db.engine import get_session
 from scraper.pipeline import _parse_years, _resolve_since, run
@@ -33,6 +34,18 @@ def main() -> None:
     league_season_ids = run(
         league_codes, years, force_refresh=args.force_refresh, since=_resolve_since(args)
     )
+
+    if not league_season_ids:
+        # Every requested league-season failed at the schedule-scrape stage
+        # (e.g. the site is blocking this host outright). Exit non-zero so a
+        # scheduled CI run fails visibly and skips republishing an unchanged
+        # database, instead of reporting a green no-op.
+        print(
+            "ERROR: no league-seasons were scraped — every schedule fetch failed. "
+            "Nothing to recompute or publish.",
+            file=sys.stderr,
+        )
+        raise SystemExit(1)
 
     print("Recomputing derived stats ...")
     session = get_session()

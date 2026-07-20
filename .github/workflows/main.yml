@@ -49,6 +49,9 @@ jobs:
             --years 2026 \
             --last-month
 
+      # Runs only if every step above succeeded — scripts.refresh_data exits
+      # non-zero when *all* schedule scrapes fail, which fails the job here
+      # rather than silently republishing an unchanged database.
       - name: Publish data
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
