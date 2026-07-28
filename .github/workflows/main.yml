@@ -1,13 +1,26 @@
 
 # .github/workflows/refresh-data.yml
+#
+# MANUAL-ONLY. The weekly refresh now runs locally via Windows Task Scheduler
+# (scripts/weekly_refresh.ps1, installed by scripts/install_scheduled_task.ps1)
+# — see CLAUDE.md's "Data refresh cadence" section.
+#
+# The `schedule:` cron that used to live here was removed because
+# stats.britishbaseball.org.uk's CloudFront/WAF returns 403 to GitHub's
+# hosted-runner IP ranges. It worked until 2026-07-12 and has been blocked on
+# every attempt since 2026-07-19 (including three separate runners an hour
+# apart, which rules out an unlucky runner IP), while the identical request
+# with the identical headers from a home connection returns 200. Every run
+# died on the very first schedule fetch, seconds in — nothing here is
+# retryable around a block at the network edge.
+#
+# Kept dispatchable rather than deleted: if the block ever lifts, a manual run
+# is the cheapest way to find out, and it's still the right place to do a
+# full-season backfill from a clean checkout.
 
 name: Refresh Data
 
 on:
-  schedule:
-    # Every Sunday at 21:00 UK time
-    # GitHub uses UTC
-    - cron: '0 20 * * 0'
   workflow_dispatch:
 
 

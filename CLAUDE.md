@@ -252,22 +252,43 @@ writes back upstream.
 
 ## Data refresh cadence
 
-Refresh runs both on a schedule and on demand — three triggers, all ending at the same code
+Refresh runs both on a schedule and on demand — all triggers end at the same code
 path (`scraper.pipeline.run()` then `stats.recompute.recompute_league_season()` per touched
 `league_season_id`, via `scripts/refresh_data.py`):
-- **`.github/workflows/main.yml`** — a GitHub Actions cron job, Sundays 21:00 UK time
-  (`0 20 * * 0` UTC) plus manual `workflow_dispatch`. Runs `uv sync`, then `scripts.pull_latest_db`
-  (fetches the currently-published `data/stats.db` — the checkout itself never has this file, see
-  "Deployment" below), then `alembic upgrade head` (so a schema migration merged since the last
-  publish gets applied automatically rather than requiring a human to remember to publish first),
-  then `scripts.refresh_data` windowed with `--last-week` (see below) for every league, then
-  `scripts.publish_db` to push the result back out as the release asset. No PR/review step, so a
-  bad scrape publishes directly — same tradeoff as the old commit-straight-to-`main` design, just
-  without the git-history growth (see "Deployment" below for why that changed).
+- **`scripts/weekly_refresh.ps1`, driven by Windows Task Scheduler** — the scheduled trigger.
+  Runs `scripts.refresh_data --last-week` for every league, then (only if that succeeded)
+  `scripts.publish_db`. Registered by `scripts/install_scheduled_task.ps1` (run once) as a
+  Sunday 21:00 *local* task — the machine's timezone is UK, so unlike the old UTC cron this
+  doesn't drift an hour in winter. The task is set `-WakeToRun` (wakes from sleep/hibernate,
+  though not from a full shutdown) and `-StartWhenAvailable` (a run missed because the PC was
+  off happens at the next boot/logon instead of being skipped), so the machine does not need
+  to be on 24/7 — only for the ~10-30 minutes a run takes. Unlike the workflow below it does
+  *not* call `scripts.pull_latest_db` first: here `data/stats.db` is the working copy, and
+  overwriting it would discard unpublished local work. Logs land in `logs/` (gitignored,
+  pruned after 90 days).
+- **`.github/workflows/main.yml`** — the same sequence on GitHub Actions, but now
+  `workflow_dispatch`-only. **Its cron was removed because the site's CloudFront/WAF returns
+  403 to GitHub's hosted-runner IP ranges.** It genuinely worked through 2026-07-12 and has
+  been blocked on every attempt since 2026-07-19 (three separate runners an hour apart on that
+  day, then the 07-26 cron), each dying on the very first schedule fetch within seconds, while
+  the byte-identical request from a home connection returns 200. Nothing in-process helps: the
+  circuit breaker in `scraper/pipeline.py` only guards box-score fetches, and `http_client`'s
+  2-attempt tenacity retry is aimed at one-off blips, not a block at the network edge. Kept
+  dispatchable so it's cheap to test whether the block has lifted, and because a clean checkout
+  is still the right place for a full-season backfill. Note it runs `scripts.pull_latest_db`
+  *before* `alembic upgrade head` — a fresh checkout has no `data/stats.db`, and SQLite would
+  otherwise auto-create an empty one that alembic migrates and publish overwrites the real
+  data with.
 - CLI: `uv run python -m scripts.refresh_data --leagues <codes> --years <spec>
   [--force-refresh] [--last-week | --last-month]`
 - The Data Admin page's "Run refresh" button (`app/pages/8_Data_Admin.py`), which shells out
   to the identical command (its own separate "Publish data" button handles publishing).
+
+Note that neither scheduled path has a PR/review step, so a bad scrape publishes directly —
+the mitigation is that `scripts/refresh_data.py` exits non-zero when *every* league's schedule
+fetch fails, and `weekly_refresh.ps1` skips publishing on a non-zero exit, so a total block
+can't silently republish an unchanged database as a green no-op (which is exactly what the
+Actions cron did on 2026-07-12 and 2026-07-19 before that guard existed).
 
 `config.CACHE_TTL_CURRENT_SEASON_HOURS = 24` means a same-day, non-forced re-run mostly hits
 the raw-HTML cache rather than re-scraping the live site; historical seasons are cached
@@ -284,12 +305,31 @@ cached, so this reprocesses cached data rather than re-hitting the network).
 
 **Recommended cadence: weekly** (games are played Sundays). `scrape_schedule()` only queues
 box-score fetches for games already `status == "final"`, so a Sunday-night run (the scheduled
-workflow's actual timing) can miss games the site hasn't finalized yet as of 21:00 UK — a
+task's actual timing) can miss games the site hasn't finalized yet as of 21:00 UK — a
 missed game is simply picked up by the following week's `--last-week` window instead, so this
 is a one-week-late catch rather than a permanent gap:
 ```
 uv run python -m scripts.refresh_data --leagues nbl,d2,d3,d4,d5 --years 2026 --last-week
 ```
+
+Managing the scheduled task (all unelevated; re-run the installer elevated to upgrade the
+principal from `Interactive` to `S4U`, i.e. "runs even when nobody is logged on"):
+```
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\install_scheduled_task.ps1
+Start-ScheduledTask     -TaskName 'British Baseball Stats Weekly Refresh'   # run now
+Get-ScheduledTaskInfo   -TaskName 'British Baseball Stats Weekly Refresh'   # last result/run time
+Unregister-ScheduledTask -TaskName 'British Baseball Stats Weekly Refresh'  # remove
+```
+Keep both `.ps1` files **ASCII-only**. Windows PowerShell 5.1 reads a BOM-less file as cp1252,
+where the third byte of a UTF-8 em dash (`E2 80 94`) decodes to `"` — a valid string delimiter,
+so a single em dash in a comment or message silently breaks parsing several lines later with a
+misleading "Missing closing '}'". The rest of this repo is UTF-8 and prose here uses em dashes
+freely; these two files are the exception.
+
+`weekly_refresh.ps1 -Window LastMonth` is the catch-up form after missed weeks, and
+`-Years` defaults to the current calendar year. That default means the task will fail weekly
+in the off-season, between the year ticking over and the new season's fixtures appearing —
+disable it over the winter if the failures are noise.
 
 ## Deployment
 
