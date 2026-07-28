@@ -9,5 +9,6 @@ data/*.db-shm
 .ruff_cache/
 .pytest_cache/
 scraper/recon/output/
+logs/
 .claude/settings.local.json
 .claude/scheduled_tasks.lock
