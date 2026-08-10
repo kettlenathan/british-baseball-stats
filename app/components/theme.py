@@ -91,6 +91,9 @@ STAT_LABELS = {
     "singles_pct": "1B%", "doubles_pct": "2B%", "triples_pct": "3B%", "hr_pct": "HR%",
     "cluster": "Cluster", "cluster_label": "Archetype", "pc1": "Component 1", "pc2": "Component 2",
     "count": "Players", "k": "k", "inertia": "Inertia", "silhouette": "Silhouette",
+    "g": "G", "gs": "GS", "team_ip_share": "IP Share", "bats": "Bats", "throws": "Throws",
+    "tendency": "Tendency", "confidence": "Confidence", "venue": "Venue",
+    "shrunk_woba_target": "Adjusted wOBA", "expected_runs": "Expected Runs",
 }
 
 STAT_FORMAT = {
@@ -109,6 +112,7 @@ STAT_FORMAT = {
     "pull_pct": ".1%", "center_pct": ".1%", "oppo_pct": ".1%", "pull_minus_oppo": "+.1%",
     "singles_pct": ".1%", "doubles_pct": ".1%", "triples_pct": ".1%", "hr_pct": ".1%",
     "pc1": ".2f", "pc2": ".2f", "silhouette": ".3f", "inertia": ".1f",
+    "g": ",.0f", "gs": ",.0f", "team_ip_share": ".0%", "expected_runs": ".2f",
 }
 
 
