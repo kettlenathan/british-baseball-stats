@@ -293,6 +293,16 @@ st.markdown(
     "very slowly and a dozen PA against lefties is nearly all noise."
 )
 st.markdown(
+    "Rankings that pick between players (who starts, who's the first bat off the bench) use a "
+    "**sample-penalized score**, not the shrunk estimate alone: the estimate minus an uncertainty "
+    "penalty that shrinks with the player's own plate appearances. This matters because shrinkage "
+    "parks a near-empty sample at league average — without the penalty, an 0-for-7 hitter "
+    "(estimate ≈ league average) would out-rank a proven slightly-below-average bat with 60 PA. "
+    "On top of that, no one is *named* a best/first-choice option — pinch-hit roles, per-slot "
+    "stat claims — on fewer than 20 PA this season; below that they're explicitly marked as "
+    "having too few PA to judge."
+)
+st.markdown(
     "When more than nine hitters are available, the **nine best adjusted bats start** and the "
     "rest are listed as the bench, each rated as a pinch-hit option against left- and "
     "right-handed pitching (the same platoon-adjusted estimate, computed for both hands). The "

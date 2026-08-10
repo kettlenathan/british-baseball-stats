@@ -1,6 +1,7 @@
 import datetime as dt
 
 import pandas as pd
+from sqlalchemy import select
 import pytest
 
 from app.components import data_access
@@ -76,6 +77,8 @@ def _fixture(session):
         return ps
 
     our_batter = player(1, "Our Batter", us, bats="R")
+    enzo = player(6, "Enzo", us)  # 0-for-7: shrunk estimate ~league average, but no evidence
+    bench_vet = player(7, "Bench Vet", us)  # 60 PA of slightly-below-average: real evidence
     their_slugger = player(2, "Their Slugger", them, bats="L")
     their_scrub = player(3, "Their Scrub", them, bats="R")
     their_ace = player(4, "Their Ace", them, throws="L")
@@ -86,6 +89,8 @@ def _fixture(session):
             BattingSeasonStats(player_season_id=their_slugger.id, pa=40, ab=35, h=18, doubles=4, hr=3, bb=5, so=4),
             BattingSeasonStats(player_season_id=their_scrub.id, pa=30, ab=28, h=4, bb=2, so=12),
             BattingSeasonStats(player_season_id=our_batter.id, pa=35, ab=30, h=10, doubles=2, hr=1, bb=5, so=6),
+            BattingSeasonStats(player_season_id=enzo.id, pa=7, ab=7, h=0, so=4),
+            BattingSeasonStats(player_season_id=bench_vet.id, pa=60, ab=55, h=14, doubles=2, bb=4, so=10),
         ]
     )
     session.add_all(
@@ -93,6 +98,11 @@ def _fixture(session):
             BattingTrueTalent(player_season_id=their_slugger.id, pa=40, observed_woba=0.55, shrunk_woba=0.45),
             BattingTrueTalent(player_season_id=their_scrub.id, pa=30, observed_woba=0.15, shrunk_woba=0.28),
             BattingTrueTalent(player_season_id=our_batter.id, pa=35, observed_woba=0.40, shrunk_woba=0.38),
+            # Enzo's shrunk estimate lands *above* the vet's despite the
+            # 0-for-7, purely because 7 PA barely moves him off the league
+            # mean — exactly the trap the conservative ranking must avoid.
+            BattingTrueTalent(player_season_id=enzo.id, pa=7, observed_woba=0.0, shrunk_woba=0.32),
+            BattingTrueTalent(player_season_id=bench_vet.id, pa=60, observed_woba=0.28, shrunk_woba=0.30),
         ]
     )
     session.add(
@@ -258,7 +268,49 @@ def test_lineup_recommendation_benches_beyond_nine(session):
     bench = out["bench"]
     assert len(bench) == 2
     assert set(bench["player"]) <= set(subs)
-    # Someone is named first bat off the bench for each hand.
-    roles = " ".join(bench["role"])
-    assert "vs LHP" in roles
-    assert "vs RHP" in roles
+    # Nobody on this bench has a single PA — the report must refuse to name
+    # a "best bat off the bench" rather than crown the least-known player.
+    assert not any("First bat" in role for role in bench["role"])
+    assert all("Too few PA" in role for role in bench["role"])
+
+
+def _add_us_star(session, ls, source_id, name):
+    """A clearly-better-than-bench regular on Us, so bench composition in
+    the role tests is forced rather than incidental."""
+    us_ts = session.execute(
+        select(TeamSeason).where(TeamSeason.league_season_id == ls.id, TeamSeason.display_name == "Us")
+    ).scalar_one()
+    p = Player(source_id=source_id, full_name=name)
+    session.add(p)
+    session.flush()
+    ps = PlayerSeason(player_id=p.id, team_season_id=us_ts.id)
+    session.add(ps)
+    session.flush()
+    session.add(BattingSeasonStats(player_season_id=ps.id, pa=40, ab=35, h=13, doubles=3, hr=1, bb=4, so=5))
+    session.add(BattingTrueTalent(player_season_id=ps.id, pa=40, observed_woba=0.42, shrunk_woba=0.40))
+
+
+def test_bench_role_requires_evidence_not_just_shrunk_estimate(session):
+    """Regression (the "Enzo" bug): an 0-for-7 bat, whose shrunk estimate
+    sits near league average and therefore *numerically above* a proven
+    below-average hitter, must neither be named the best bat off the bench
+    nor out-rank the proven hitter anywhere — judgements need a real
+    sample behind them."""
+    ls = _fixture(session)
+    stars = [f"Star {i}" for i in range(9)]
+    for i, name in enumerate(stars):
+        _add_us_star(session, ls, 100 + i, name)
+    session.commit()
+
+    out = data_access.lineup_recommendation(ls.id, "Us", [*stars, "Enzo", "Bench Vet"], vs_throws=None)
+    # The nine proven regulars start; Enzo and the vet sit.
+    assert set(out["result"].order) == set(stars)
+    bench = out["bench"]
+    assert set(bench["player"]) == {"Enzo", "Bench Vet"}
+    by_player = {r["player"]: r for _, r in bench.iterrows()}
+    # The vet has 60 PA of evidence: they get the pinch-hit call(s).
+    assert "First bat off the bench" in by_player["Bench Vet"]["role"]
+    # Enzo (7 PA) is flagged as unjudgeable, never recommended.
+    assert by_player["Enzo"]["role"] == "Too few PA to judge (7)"
+    # And the sample-penalized ranking lists the vet ahead of Enzo.
+    assert list(bench["player"]).index("Bench Vet") < list(bench["player"]).index("Enzo")

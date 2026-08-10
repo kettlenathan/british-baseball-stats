@@ -335,7 +335,8 @@ def _lineup_section(data: dict) -> list:
         story.append(
             Paragraph(
                 "Pinch-hit calls compare each bench bat's record against left- and right-handed pitching, "
-                "shrunk toward their overall level (vs-hand splits are small samples).",
+                "penalized for small samples — nobody is named a pinch-hit option on fewer than 20 PA "
+                "this season.",
                 _SMALL,
             )
         )

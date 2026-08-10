@@ -364,19 +364,50 @@ def expected_runs(profiles: list[BatterProfile], innings: int = DEFAULT_INNINGS)
 
 LINEUP_SIZE = 9
 
+# A shrunk estimate built on a tiny sample sits near league average by
+# construction — which means the *least-known* player can out-rank a proven
+# slightly-below-average bat if rankings use the point estimate alone (an
+# 0-for-7 player "beating" a .240 hitter with 60 PA for a bench role).
+# Judgement-style outputs therefore (a) rank on a lower-confidence-bound
+# score that explicitly penalizes small samples, and (b) refuse to name
+# anyone "best bat" on fewer than MIN_PA_FOR_JUDGEMENT plate appearances.
+MIN_PA_FOR_JUDGEMENT = 20
+
+# Per-PA standard deviation of a wOBA-weighted outcome (~0.5 across normal
+# batting lines). The penalty denominator uses the player's OWN sample plus
+# a small floor — deliberately NOT the shrinkage posterior's (pa + k), where
+# k=120 would dominate and leave 7 PA and 60 PA nearly indistinguishable.
+# The ranking question is "how much evidence do we have about THIS player",
+# and that is their own plate appearances.
+_WOBA_EVENT_SD = 0.5
+_PENALTY_FLOOR_PA = 10.0
+
+
+def conservative_woba(estimate: float | None, pa: int) -> float | None:
+    """Sample-aware ranking score: the (shrunk, adjusted) point estimate
+    minus an uncertainty penalty of sd/sqrt(own PA + floor). Two players
+    with similar estimates rank by who has more evidence behind theirs —
+    e.g. 60 PA of slightly-below-average beats 7 hitless PA whose shrunk
+    estimate happens to sit near league average. For ranking/selection
+    only; displayed stats stay unpenalized."""
+    if estimate is None:
+        return None
+    return estimate - _WOBA_EVENT_SD / math.sqrt(max(pa, 0) + _PENALTY_FLOOR_PA)
+
 
 def select_starters(
-    profiles: list[BatterProfile], size: int = LINEUP_SIZE
+    profiles: list[BatterProfile], size: int = LINEUP_SIZE, scores: list[float] | None = None
 ) -> tuple[list[BatterProfile], list[BatterProfile]]:
     """Split the available hitters into (starters, bench): the `size` best
-    profiles start — "best" meaning the profile's implied wOBA, i.e. the
-    shrunk, platoon-adjusted quality estimate the optimizer itself runs on —
-    and everyone else goes to the bench. Both halves keep their original
+    start and everyone else goes to the bench. "Best" is taken from `scores`
+    when given (callers pass conservative_woba-style sample-aware scores);
+    otherwise the profile's implied wOBA. Both halves keep their original
     relative order (ties broken by input position) so the output is
     deterministic for the same inputs."""
     if len(profiles) <= size:
         return list(profiles), []
-    ranked = sorted(range(len(profiles)), key=lambda i: (-profiles[i].implied_woba, i))
+    ranking = scores if scores is not None else [p.implied_woba for p in profiles]
+    ranked = sorted(range(len(profiles)), key=lambda i: (-ranking[i], i))
     starter_indices = set(ranked[:size])
     starters = [p for i, p in enumerate(profiles) if i in starter_indices]
     bench = [p for i, p in enumerate(profiles) if i not in starter_indices]
@@ -521,9 +552,12 @@ def slot_rationales(order: list[str], stats_by_name: dict[str, dict]) -> list[st
         v = stats_by_name.get(name, {}).get(key)
         return None if v is None or (isinstance(v, float) and math.isnan(v)) else v
 
+    # Hitters under the judgement threshold don't compete for trait ranks
+    # either — an 8-PA .450 OBP must not outrank a real one.
+    judged = [name for name in order if (stats_by_name.get(name, {}).get("pa") or 0) >= MIN_PA_FOR_JUDGEMENT]
     ranks: dict[str, dict[str, int]] = {key: {} for key, _, _ in _TRAIT_SPECS}
     for key, higher_better, _ in _TRAIT_SPECS:
-        scored = [(name, value(name, key)) for name in order]
+        scored = [(name, value(name, key)) for name in judged]
         scored = [(name, v) for name, v in scored if v is not None]
         scored.sort(key=lambda nv: -nv[1] if higher_better else nv[1])
         ranks[key] = {name: r for r, (name, v) in enumerate(scored)}
@@ -534,6 +568,13 @@ def slot_rationales(order: list[str], stats_by_name: dict[str, dict]) -> list[st
         pa = stats.get("pa") or 0
         if not pa:
             lines.append(f"{slot}. {name} — no season data yet; projected as a league-average bat.")
+            continue
+        if pa < MIN_PA_FOR_JUDGEMENT:
+            # Don't cite a .450 OBP built on 8 PA as if it meant something.
+            lines.append(
+                f"{slot}. {name} — only {pa} PA this season, too few to judge; "
+                "treated as roughly league average until there's more data."
+            )
             continue
         traits = []
         for key, _, phrase in _TRAIT_SPECS:

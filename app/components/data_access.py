@@ -37,7 +37,9 @@ from stats.advanced_stats import woba as compute_woba
 from stats.archetypes import fit_archetypes, k_diagnostics
 from stats.league_context import _league_batting_totals
 from stats.lineup import (
+    MIN_PA_FOR_JUDGEMENT,
     build_profile,
+    conservative_woba,
     league_component_rates,
     optimize_lineup,
     platoon_adjusted_woba,
@@ -1479,7 +1481,20 @@ def lineup_recommendation(
             }
         )
 
-    starters, bench_profiles = select_starters(profiles)
+    def season_pa(name: str) -> int:
+        row = by_player.get(name)
+        return int(row["pa"]) if row is not None else 0
+
+    def conservative(name: str, hand: str | None) -> float:
+        # Sample-aware ranking score: the adjusted estimate minus an
+        # uncertainty penalty, so "7 PA of nothing ≈ league average" can't
+        # outrank a real track record (see stats/lineup.py).
+        estimate = adjusted_target(name, hand)
+        score = conservative_woba(estimate if estimate is not None else ctx_woba, season_pa(name))
+        return score if score is not None else 0.0
+
+    selection_scores = [conservative(name, vs_throws) for name in player_names]
+    starters, bench_profiles = select_starters(profiles, scores=selection_scores)
     result = optimize_lineup(starters)
 
     _STAT_KEYS = ("pa", "avg", "obp", "slg", "iso", "bb_pct", "k_pct", "sb")
@@ -1499,17 +1514,26 @@ def lineup_recommendation(
 
     bench_rows = []
     bench_names = [p.name for p in bench_profiles]
-    best_vs = {
-        hand: max(bench_names, key=lambda n: adjusted_target(n, hand) or ctx_woba or 0.0, default=None)
-        for hand in ("L", "R")
-    }
+    # Only bench bats with a real sample are eligible to be *named* the best
+    # option — an 0-for-7 player whose shrunk estimate sits near league
+    # average must not be recommended over hitters with actual track
+    # records. Ranking among the eligible is still the conservative
+    # (sample-penalized) vs-hand estimate.
+    eligible = [n for n in bench_names if season_pa(n) >= MIN_PA_FOR_JUDGEMENT]
+    best_vs = {hand: max(eligible, key=lambda n: conservative(n, hand), default=None) for hand in ("L", "R")}
     for name in bench_names:
         roles = [f"vs {hand}HP" for hand in ("L", "R") if best_vs[hand] == name]
+        if roles:
+            role = "First bat off the bench " + " & ".join(roles)
+        elif season_pa(name) < MIN_PA_FOR_JUDGEMENT:
+            role = f"Too few PA to judge ({season_pa(name)})"
+        else:
+            role = ""
         split_l, split_r = vs_split["L"].get(name), vs_split["R"].get(name)
         bench_rows.append(
             {
                 "player": name,
-                "role": "First bat off the bench " + " & ".join(roles) if roles else "",
+                "role": role,
                 **season_stats(name),
                 "avg_vs_lhp": split_l["avg"] if split_l is not None else None,
                 "pa_vs_lhp": int(split_l["pa"]) if split_l is not None else 0,
@@ -1519,7 +1543,9 @@ def lineup_recommendation(
         )
     bench_df = pd.DataFrame(bench_rows)
     if not bench_df.empty:
-        bench_df = bench_df.sort_values("role", ascending=False, kind="stable").reset_index(drop=True)
+        bench_df = bench_df.sort_values(
+            "player", key=lambda s: s.map(lambda n: -conservative(n, vs_throws)), kind="stable"
+        ).reset_index(drop=True)
 
     return {"result": result, "lineup": lineup_df, "bench": bench_df, "profiles": pd.DataFrame(audit_rows)}
 
