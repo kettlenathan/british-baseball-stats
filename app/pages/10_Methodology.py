@@ -282,7 +282,7 @@ st.markdown(
     "prediction — weekend doubleheaders usually mean two different starters."
 )
 st.markdown(
-    "The **lineup optimizer** turns each selected batter into per-PA probabilities of "
+    "The **lineup optimizer** turns each available batter into per-PA probabilities of "
     "walk/HBP/single/double/triple/HR/out. The overall quality of the profile is anchored to the "
     "batter's *true-talent* (shrunk) wOBA from the shrinkage layer above — the raw season line "
     "only contributes the *shape* (their observed mix of hit types), scaled to match that target. "
@@ -291,6 +291,16 @@ st.markdown(
     "platoon-adjusted: the batter's observed career vs-hand wOBA is shrunk toward their overall "
     "talent with a much larger stabilization point (300 PA), because platoon splits stabilize "
     "very slowly and a dozen PA against lefties is nearly all noise."
+)
+st.markdown(
+    "When more than nine hitters are available, the **nine best adjusted bats start** and the "
+    "rest are listed as the bench, each rated as a pinch-hit option against left- and "
+    "right-handed pitching (the same platoon-adjusted estimate, computed for both hands). The "
+    "recommendation itself is displayed in ordinary box-score terms — each slot's line cites the "
+    "hitter's OBP, extra-base power (ISO), strikeout rate, steals, or walk rate *ranked within "
+    "that specific nine* — because shrunk wOBA values cluster tightly together and don't explain "
+    "anything a coach can act on. The internal model values remain visible in the page's "
+    "\"under the hood\" expander."
 )
 st.markdown(
     "Expected runs for a batting order come from an exact Markov chain over the 24 base-out "

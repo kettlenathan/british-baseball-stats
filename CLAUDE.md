@@ -181,7 +181,12 @@ writes back upstream.
   ignored — they shift totals, not order rankings); search is heuristic-seed + pairwise-swap
   hill-climb with fixed-seed restarts, so results are deterministic. Per-batter transition
   operators are collapsed to 24×24 matrices and lru_cached (profiles are frozen dataclasses)
-  — this is what makes optimize_lineup fast enough (~1.5s) to run live in the page.
+  — this is what makes optimize_lineup fast enough (~1.5s) to run live in the page. When more
+  than 9 hitters are available, `select_starters` starts the 9 best adjusted bats and the rest
+  are benched with best-pinch-hit-vs-LHP/RHP roles (both hands rated per player). User-facing
+  rationale comes from `slot_rationales` and is deliberately phrased in box-score stats
+  (OBP/ISO/K%/SB ranked within the chosen nine), never shrunk-wOBA internals — those live only
+  in the page's "under the hood" audit table.
 - `archetypes.py` — unsupervised k-means clustering of batters into descriptive archetypes,
   computed at read time (not materialized, unlike everything else in `stats/`) since it
   depends on user-adjustable parameters (population scope, k) with no single fixed "correct"

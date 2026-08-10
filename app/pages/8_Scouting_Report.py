@@ -149,9 +149,10 @@ st.subheader(f"{our_team}: recommended lineup")
 roster = team_roster(league_season_id)
 our_players = roster[roster["team"] == our_team]["player"].tolist()
 available = st.multiselect(
-    "Available hitters (pick at least 9 — the order of everyone selected is optimized)",
+    "Available this week (select everyone at the game — the best 9 bats start, the rest are ranked "
+    "as options off the bench)",
     our_players,
-    default=our_players[:9] if len(our_players) >= 9 else our_players,
+    default=our_players,
     key="scout_available",
 )
 
@@ -160,22 +161,34 @@ if len(available) < 2:
     st.info("Select the hitters who are available this week.")
 else:
     if len(available) < 9:
-        st.warning(f"Only {len(available)} hitters selected — a legal lineup needs 9.")
+        st.warning(f"Only {len(available)} hitters available — all of them are in the lineup.")
     with st.spinner("Optimizing batting order…"):
         lineup_data = lineup_recommendation(league_season_id, our_team, available, vs_throws)
     result = lineup_data["result"]
     st.markdown(
-        f"**{result.expected_runs:.2f} expected runs** per 7-inning game "
-        f"(batting in selection order: {result.baselines['as_selected']:.2f}; "
-        f"best-to-worst by wOBA: {result.baselines['by_woba_desc']:.2f})."
+        f"**Starting nine — {result.expected_runs:.2f} expected runs** per 7-inning game "
+        f"(same nine batted best-to-worst instead: {result.baselines['by_woba_desc']:.2f})."
     )
+    lineup_table = lineup_data["lineup"]
+    st.dataframe(
+        lineup_table, hide_index=True, use_container_width=True, column_config=column_config_for(lineup_table)
+    )
+    st.markdown("**Why each hitter is where they are**")
     for line in result.rationale:
         st.markdown(line)
     st.caption(
         "Order differences are worth fractions of a run per game — a tiebreaker between defensible "
         "orders, not a verdict. Positions are yours to assign."
     )
-    with st.expander("What the model believed about each hitter"):
+    bench = lineup_data["bench"]
+    if not bench.empty:
+        st.markdown("**Bench**")
+        st.dataframe(bench, hide_index=True, use_container_width=True, column_config=column_config_for(bench))
+        st.caption(
+            "Pinch-hit calls compare each bench bat's record against left- and right-handed pitching "
+            "(shrunk toward their overall level, since these splits are small samples)."
+        )
+    with st.expander("Under the hood: what the model believed about each hitter"):
         profiles = lineup_data["profiles"]
         st.dataframe(
             profiles, hide_index=True, use_container_width=True, column_config=column_config_for(profiles)
@@ -259,7 +272,16 @@ if st.button("Generate PDF", type="primary"):
                 "hitter_details": hitter_details,
                 "staff": staff,
                 "pitcher_details": pitcher_details,
-                "lineup": {"result": lineup_data["result"], "vs_throws": vs_throws} if lineup_data else None,
+                "lineup": (
+                    {
+                        "result": lineup_data["result"],
+                        "lineup": lineup_data["lineup"],
+                        "bench": lineup_data["bench"],
+                        "vs_throws": vs_throws,
+                    }
+                    if lineup_data
+                    else None
+                ),
             }
         )
     st.download_button(

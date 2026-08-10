@@ -36,7 +36,14 @@ from stats.advanced_stats import era_plus, fip, wrc_plus
 from stats.advanced_stats import woba as compute_woba
 from stats.archetypes import fit_archetypes, k_diagnostics
 from stats.league_context import _league_batting_totals
-from stats.lineup import build_profile, league_component_rates, optimize_lineup, platoon_adjusted_woba
+from stats.lineup import (
+    build_profile,
+    league_component_rates,
+    optimize_lineup,
+    platoon_adjusted_woba,
+    select_starters,
+    slot_rationales,
+)
 from stats.probable_pitchers import probable_starters, staff_usage
 from stats.rate_stats import (
     avg,
@@ -1336,7 +1343,14 @@ def _vs_hand_woba_rows(session, player_names: list[str], throws: str, as_batter:
     records = []
     for row in rows:
         components = SimpleNamespace(**{f: (getattr(row, f) or 0) for f in component_fields})
-        records.append({"player": row.full_name, "pa": row.pa, "woba": compute_woba(components)})
+        records.append(
+            {
+                "player": row.full_name,
+                "pa": row.pa,
+                "woba": compute_woba(components),
+                "avg": avg(components.h, components.ab),
+            }
+        )
     return pd.DataFrame(records)
 
 
@@ -1386,11 +1400,20 @@ def league_batting_component_totals(league_season_id: int) -> dict:
 def lineup_recommendation(
     league_season_id: int, team_name: str, player_names: list[str], vs_throws: str | None
 ) -> dict:
-    """Assemble lineup-optimizer inputs for the selected batters and run the
-    optimization (stats/lineup.py). Returns {"result": LineupResult,
-    "profiles": DataFrame} — the DataFrame shows, per batter, what the
-    model actually believed (shrunk wOBA, platoon-adjusted target, event
-    rates), so the recommendation is auditable in the UI/PDF."""
+    """Assemble lineup-optimizer inputs for the available batters and run the
+    optimization (stats/lineup.py). The 9 best bats (platoon-adjusted) start;
+    everyone else is benched and ranked as a pinch-hit option vs LHP and vs
+    RHP. Returns:
+
+    - "result": LineupResult for the starting nine (rationale phrased in
+      box-score stats via stats/lineup.py:slot_rationales, not model
+      internals),
+    - "lineup": DataFrame, one row per slot with the season stats that
+      justify it (PA/AVG/OBP/SLG/ISO/BB%/K%/SB),
+    - "bench": DataFrame with each bench bat's season line, observed vs-hand
+      splits, and a `role` naming the best bat off the bench vs LHP/RHP,
+    - "profiles": the model-internals audit table (what the optimizer
+      actually believed), kept for the "under the hood" expander."""
     hitters = scouting_hitters(league_season_id, team_name)
     league_rates = league_component_rates(league_batting_component_totals(league_season_id))
     ctx_woba = None
@@ -1401,11 +1424,35 @@ def lineup_recommendation(
     finally:
         session.close()
 
-    vs_hand = batters_vs_hand(player_names, vs_throws) if vs_throws in ("L", "R") else pd.DataFrame()
-    vs_by_player = (
-        {r["player"]: (r["pa"], r["woba"]) for _, r in vs_hand.iterrows()} if not vs_hand.empty else {}
-    )
+    # Vs-hand history for BOTH hands: the profile target uses the hand we're
+    # optimizing against, but the bench roles need each player rated vs LHP
+    # and vs RHP regardless of who starts.
+    vs_split = {
+        hand: {r["player"]: r for _, r in batters_vs_hand(player_names, hand).iterrows()}
+        for hand in ("L", "R")
+    }
     by_player = {r["player"]: r for _, r in hitters.iterrows()} if not hitters.empty else {}
+
+    def overall_talent(name: str) -> float | None:
+        row = by_player.get(name)
+        if row is None:
+            return None
+        overall = row["shrunk_woba"] if pd.notna(row["shrunk_woba"]) else row["woba"]
+        return overall if pd.notna(overall) else ctx_woba
+
+    def adjusted_target(name: str, hand: str | None) -> float | None:
+        # No season data at all: anchor to the same league-context wOBA the
+        # known hitters' shrinkage uses, so best-9 selection compares
+        # everyone on one scale (build_profile's own None-fallback is the
+        # component-implied league wOBA, which can sit on a different scale
+        # from the stored context value).
+        target = overall_talent(name) if by_player.get(name) is not None else ctx_woba
+        if target is None or hand not in ("L", "R"):
+            return target
+        split = vs_split[hand].get(name)
+        vs_pa = int(split["pa"]) if split is not None else 0
+        vs_woba = split["woba"] if split is not None and pd.notna(split["woba"]) else None
+        return platoon_adjusted_woba(target, vs_pa, vs_woba)
 
     profiles = []
     audit_rows = []
@@ -1416,31 +1463,65 @@ def lineup_recommendation(
             if row is not None
             else {"pa": 0}
         )
-        overall = None
-        if row is not None:
-            overall = row["shrunk_woba"] if pd.notna(row["shrunk_woba"]) else row["woba"]
-            overall = overall if pd.notna(overall) else ctx_woba
-        target = overall
-        vs_pa, vs_woba = vs_by_player.get(name, (0, None))
-        if target is not None and vs_throws in ("L", "R"):
-            target = platoon_adjusted_woba(target, vs_pa, vs_woba)
-        profile = build_profile(name, counts, league_rates, target)
+        profile = build_profile(name, counts, league_rates, adjusted_target(name, vs_throws))
         profiles.append(profile)
+        split = vs_split[vs_throws].get(name) if vs_throws in ("L", "R") else None
         audit_rows.append(
             {
                 "player": name,
                 "pa": counts.get("pa", 0),
-                "shrunk_woba": overall,
-                "vs_hand_pa": vs_pa,
-                "vs_hand_woba": vs_woba,
+                "shrunk_woba": overall_talent(name),
+                "vs_hand_pa": int(split["pa"]) if split is not None else 0,
+                "vs_hand_woba": split["woba"] if split is not None else None,
                 "target_woba": profile.implied_woba,
                 "onbase": profile.p_onbase,
                 "power": profile.power,
             }
         )
 
-    result = optimize_lineup(profiles)
-    return {"result": result, "profiles": pd.DataFrame(audit_rows)}
+    starters, bench_profiles = select_starters(profiles)
+    result = optimize_lineup(starters)
+
+    _STAT_KEYS = ("pa", "avg", "obp", "slg", "iso", "bb_pct", "k_pct", "sb")
+
+    def season_stats(name: str) -> dict:
+        row = by_player.get(name)
+        if row is None:
+            return {}
+        return {k: (row[k] if pd.notna(row[k]) else None) for k in _STAT_KEYS if k in row}
+
+    stats_by_name = {name: season_stats(name) for name in player_names}
+    result.rationale = slot_rationales(result.order, stats_by_name)
+
+    lineup_df = pd.DataFrame(
+        [{"slot": slot, "player": name, **season_stats(name)} for slot, name in enumerate(result.order, start=1)]
+    )
+
+    bench_rows = []
+    bench_names = [p.name for p in bench_profiles]
+    best_vs = {
+        hand: max(bench_names, key=lambda n: adjusted_target(n, hand) or ctx_woba or 0.0, default=None)
+        for hand in ("L", "R")
+    }
+    for name in bench_names:
+        roles = [f"vs {hand}HP" for hand in ("L", "R") if best_vs[hand] == name]
+        split_l, split_r = vs_split["L"].get(name), vs_split["R"].get(name)
+        bench_rows.append(
+            {
+                "player": name,
+                "role": "First bat off the bench " + " & ".join(roles) if roles else "",
+                **season_stats(name),
+                "avg_vs_lhp": split_l["avg"] if split_l is not None else None,
+                "pa_vs_lhp": int(split_l["pa"]) if split_l is not None else 0,
+                "avg_vs_rhp": split_r["avg"] if split_r is not None else None,
+                "pa_vs_rhp": int(split_r["pa"]) if split_r is not None else 0,
+            }
+        )
+    bench_df = pd.DataFrame(bench_rows)
+    if not bench_df.empty:
+        bench_df = bench_df.sort_values("role", ascending=False, kind="stable").reset_index(drop=True)
+
+    return {"result": result, "lineup": lineup_df, "bench": bench_df, "profiles": pd.DataFrame(audit_rows)}
 
 
 @st.cache_data

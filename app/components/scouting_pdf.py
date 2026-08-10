@@ -287,6 +287,13 @@ def _pitchers_section(data: dict) -> list:
     return story
 
 
+_LINEUP_TABLE_COLS = ["slot", "player", "pa", "avg", "obp", "slg", "iso", "bb_pct", "k_pct", "sb"]
+_BENCH_TABLE_COLS = [
+    "player", "role", "pa", "avg", "obp", "iso", "k_pct",
+    "avg_vs_lhp", "pa_vs_lhp", "avg_vs_rhp", "pa_vs_rhp",
+]
+
+
 def _lineup_section(data: dict) -> list:
     story = [PageBreak(), Paragraph("Recommended lineup", _H2)]
     lineup = data.get("lineup")
@@ -299,14 +306,17 @@ def _lineup_section(data: dict) -> list:
     )
     story.append(
         Paragraph(
-            f"Best order found for the {len(result.order)} selected hitters{vs_note}: "
-            f"<b>{result.expected_runs:.2f} expected runs</b> per 7-inning game "
-            f"(batting in selection order: {result.baselines.get('as_selected', 0):.2f}; "
-            f"simple best-to-worst: {result.baselines.get('by_woba_desc', 0):.2f}).",
+            f"Starting nine{vs_note}: <b>{result.expected_runs:.2f} expected runs</b> per 7-inning game "
+            f"(the same nine batted simply best-to-worst: {result.baselines.get('by_woba_desc', 0):.2f}).",
             _BODY,
         )
     )
+    lineup_table = lineup.get("lineup")
+    if lineup_table is not None and not lineup_table.empty:
+        story.append(Spacer(1, 2 * mm))
+        story.append(_df_table(lineup_table, [c for c in _LINEUP_TABLE_COLS if c in lineup_table.columns]))
     story.append(Spacer(1, 2 * mm))
+    story.append(Paragraph("<b>Why each hitter is where they are</b>", _BODY))
     for line in result.rationale:
         story.append(Paragraph(line, _BODY))
     story.append(Spacer(1, 2 * mm))
@@ -317,6 +327,18 @@ def _lineup_section(data: dict) -> list:
             _SMALL,
         )
     )
+    bench = lineup.get("bench")
+    if bench is not None and not bench.empty:
+        story.append(Spacer(1, 3 * mm))
+        story.append(Paragraph("Bench", _H3))
+        story.append(_df_table(bench, [c for c in _BENCH_TABLE_COLS if c in bench.columns]))
+        story.append(
+            Paragraph(
+                "Pinch-hit calls compare each bench bat's record against left- and right-handed pitching, "
+                "shrunk toward their overall level (vs-hand splits are small samples).",
+                _SMALL,
+            )
+        )
     return story
 
 
