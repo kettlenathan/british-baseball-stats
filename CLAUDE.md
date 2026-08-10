@@ -32,7 +32,7 @@ uv run alembic revision --autogenerate -m "..."
 uv run alembic upgrade head
 ```
 
-The Data Admin page in the Streamlit app (`app/pages/8_Data_Admin.py`) also runs
+The Data Admin page in the Streamlit app (`app/pages/9_Data_Admin.py`) also runs
 `scripts.refresh_data` as a subprocess, so scraper changes are exercised from the UI too —
 this trigger is disabled when `IS_DEPLOYED` is set in `st.secrets` (see "Deployment" below).
 
@@ -163,6 +163,25 @@ writes back upstream.
   qualifying players, or the variance decomposition goes non-positive) — `k_self_calibrated`
   on each row records which path was used. Writes `BattingTrueTalent`/`PitchingTrueTalent`,
   one row per player-season, via the normal `stats/recompute.py` pipeline.
+- `probable_pitchers.py` — read-time (not materialized) inference of an opponent's likely
+  starters for the Scouting Report page, since the site publishes no rotation data: each
+  played game's starter is identified from the play-by-play (the pitcher of the team's first
+  defensive PA, ordered by inning then `source_play_id`), falling back to most-outs-in-game
+  when a game has no play-by-play; pitchers are then ranked by recency-weighted start count
+  (exponential decay, half-life 2 weeks, measured from the team's own latest game so
+  historical seasons work). Confidence labels come from each pitcher's share of the summed
+  weights — always presented as top-2/3, never a single prediction (weekend doubleheaders).
+- `lineup.py` — batting-order recommendation, DB-free (callers pass plain dicts, fully
+  testable): each batter becomes per-PA event probabilities anchored to their *shrunk* wOBA
+  (raw season line contributes only the hit-type mix, scaled to hit that target; BB/HBP rates
+  shrunk toward league with the published stabilization k), optionally platoon-adjusted vs
+  the probable starter's hand (observed vs-hand wOBA shrunk toward overall talent, k=300 PA).
+  Expected runs per order come from an exact Markov chain over the 24 base-out states
+  (7-inning games, deterministic advancement, no steals/sacs/DPs; mercy rules deliberately
+  ignored — they shift totals, not order rankings); search is heuristic-seed + pairwise-swap
+  hill-climb with fixed-seed restarts, so results are deterministic. Per-batter transition
+  operators are collapsed to 24×24 matrices and lru_cached (profiles are frozen dataclasses)
+  — this is what makes optimize_lineup fast enough (~1.5s) to run live in the page.
 - `archetypes.py` — unsupervised k-means clustering of batters into descriptive archetypes,
   computed at read time (not materialized, unlike everything else in `stats/`) since it
   depends on user-adjustable parameters (population scope, k) with no single fixed "correct"
@@ -186,7 +205,7 @@ writes back upstream.
 - `app/env.py` holds `is_deployed()`, the one shared signal for "running on the hosted
   Community Cloud deployment vs. locally" — reads an `IS_DEPLOYED` secret that's only ever
   set via the Community Cloud dashboard, never committed. `Home.py` uses it to decide whether
-  to include the Data Admin page in navigation at all; `8_Data_Admin.py` also checks it
+  to include the Data Admin page in navigation at all; `9_Data_Admin.py` also checks it
   directly as defense in depth.
 - `app/components/data_access.py` holds all `@st.cache_data`-wrapped DB-query functions
   returning pandas DataFrames. This layer only *displays* what `stats/` already derived —
@@ -228,25 +247,41 @@ writes back upstream.
   than the clustering inputs — includes ISO/Center%/1B%/raw Pull%/Oppo% for descriptive context
   even though they aren't clustering features), and a static reference expander mapping each
   pairwise archetype dimension to a real, well-known MLB career.
-- `app/pages/8_Data_Admin.py` runs the scraper/recompute pipeline as a subprocess from the
+- `app/pages/8_Scouting_Report.py` — opponent prep: pick your team + opponent (defaulting to
+  the next `status == "scheduled"` fixture via `data_access.next_fixtures`), see probable
+  pitchers (`stats/probable_pitchers.py`) and a recommended batting order
+  (`stats/lineup.py`, hand-adjustable vs the probable starter), and download the full report
+  as a PDF. The PDF is built by `app/components/scouting_pdf.py` — reportlab + matplotlib
+  (Agg), deliberately **not** Plotly static export, which needs a Chrome binary via kaleido
+  that Community Cloud can't reliably provide; the matplotlib spray fan reuses `charts.py`'s
+  `PULL_FAN_HALF_WIDTH_DEGREES` geometry and `theme.py`'s light OUTCOME_COLORS so the PDF
+  matches the app. Read-only throughout, so unlike Data Admin it works on the deployed app.
+  PDF detail depth: top 6 hitters (≥20 PA) get spray-chart blocks, top 3 probable pitchers
+  get full blocks including `roster_vs_pitcher` (your batters' career history vs them).
+  `formatting.py:column_config_for(df)` exists for this page's tables (derive config from
+  whatever columns are present rather than a fixed list).
+- `app/pages/9_Data_Admin.py` runs the scraper/recompute pipeline as a subprocess from the
   UI and shows recent `ScrapeLog` activity. Only reachable at all when `is_deployed()` is
   False (see above); its own live-refresh controls are additionally gated the same way.
-- `app/pages/9_Methodology.py` documents the wOBA/wRC+/FIP/ERA+/WAR formulas and what's
+- `app/pages/10_Methodology.py` documents the wOBA/wRC+/FIP/ERA+/WAR formulas and what's
   fixed (published linear weight coefficients, `stats/constants.py`) vs. self-calibrated per
   league-season (`stats/league_context.py`), plus the fixed-geometry pull-tendency/spray-chart
   approximation, the first-pitch-strike% count-diffing method, the matchup table's
   no-minimum-sample-size caveat, the empirical-Bayes shrinkage formula (`stats/shrinkage.py`),
-  and the batter-archetype clustering feature set/exclusions (`stats/archetypes.py`) — keep it
-  in sync if any of those modules' approach changes.
-- `app/pages/10_Feedback.py` files a GitHub issue against `config.GITHUB_REPO` via
+  the batter-archetype clustering feature set/exclusions (`stats/archetypes.py`), and the
+  scouting report's probable-pitcher inference and lineup-optimizer model
+  (`stats/probable_pitchers.py`, `stats/lineup.py`) — keep it in sync if any of those
+  modules' approach changes.
+- `app/pages/11_Feedback.py` files a GitHub issue against `config.GITHUB_REPO` via
   the REST API, authenticated with a `GITHUB_TOKEN` secret (Community Cloud dashboard or a
   local `.streamlit/secrets.toml` for testing — never committed). Degrades to an explanatory
   message if the secret isn't configured, rather than failing.
 - Page order in `Home.py`'s `st.navigation()` list groups thematically rather than just
   following filename numbers: overview (Home) → league-wide stat views (Leaderboards, Player
   Explorer) → single-entity deep dives (Player Page, Team Page) → multi-entity analysis
-  (Player Comparison, Team Comparison, Batter Archetypes) → ops (Data Admin, dev-only,
-  spliced in via `pages.insert()`) → meta/reference (Methodology, Feedback). Filename number
+  (Player Comparison, Team Comparison, Batter Archetypes) → game prep (Scouting Report) →
+  ops (Data Admin, dev-only, spliced in via `pages.insert()`) → meta/reference (Methodology,
+  Feedback). Filename number
   prefixes are kept in sync with this display order purely so the directory listing itself
   reads sensibly to a human browsing it — Streamlit itself only honors list order.
 
@@ -281,7 +316,7 @@ path (`scraper.pipeline.run()` then `stats.recompute.recompute_league_season()` 
   data with.
 - CLI: `uv run python -m scripts.refresh_data --leagues <codes> --years <spec>
   [--force-refresh] [--last-week | --last-month]`
-- The Data Admin page's "Run refresh" button (`app/pages/8_Data_Admin.py`), which shells out
+- The Data Admin page's "Run refresh" button (`app/pages/9_Data_Admin.py`), which shells out
   to the identical command (its own separate "Publish data" button handles publishing).
 
 Note that neither scheduled path has a PR/review step, so a bad scrape publishes directly —
@@ -397,7 +432,7 @@ gate its live-refresh controls if reached directly — `db/storage.py` also uses
 (without going through `app/`, since `db/` must not depend on `app/`) to decide whether it's
 safe to auto-refresh a stale local `data/stats.db` (see above).
 
-The Feedback page (`app/pages/10_Feedback.py`) needs a `GITHUB_TOKEN` secret (a PAT or
+The Feedback page (`app/pages/11_Feedback.py`) needs a `GITHUB_TOKEN` secret (a PAT or
 fine-grained token with Issues: write access on `config.GITHUB_REPO`) to file submissions as
 GitHub issues — without it, the page shows a "not configured" message instead of failing.
 Deliberately doesn't write feedback to `data/stats.db`: local file writes aren't reliably

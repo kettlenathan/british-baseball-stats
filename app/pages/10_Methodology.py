@@ -269,6 +269,49 @@ st.markdown(
     "raising the minimum PA gives a cleaner read at the cost of a smaller population to cluster."
 )
 
+st.subheader("Scouting reports: probable pitchers and the lineup optimizer")
+st.markdown(
+    "The Scouting Report page infers **probable pitchers** from usage rather than any published "
+    "rotation (the league doesn't publish one). The starter of each played game is identified "
+    "from the play-by-play — whoever threw the team's first defensive plate appearance — falling "
+    "back to \"most outs recorded in that game\" for games with no play-by-play feed. Each start "
+    "is then weighted by an exponential recency decay (half-life two weeks, measured from the "
+    "team's own most recent game, not today's date, so historical seasons rank sensibly), and "
+    "pitchers are ranked by their summed weight. The confidence label reflects each pitcher's "
+    "share of that recency-weighted total. This is an informed guess about tendencies, not a "
+    "prediction — weekend doubleheaders usually mean two different starters."
+)
+st.markdown(
+    "The **lineup optimizer** turns each selected batter into per-PA probabilities of "
+    "walk/HBP/single/double/triple/HR/out. The overall quality of the profile is anchored to the "
+    "batter's *true-talent* (shrunk) wOBA from the shrinkage layer above — the raw season line "
+    "only contributes the *shape* (their observed mix of hit types), scaled to match that target. "
+    "Walk and HBP rates are shrunk toward league average with the published batting "
+    "stabilization point. When the opposing starter's throwing hand is known, the target wOBA is "
+    "platoon-adjusted: the batter's observed career vs-hand wOBA is shrunk toward their overall "
+    "talent with a much larger stabilization point (300 PA), because platoon splits stabilize "
+    "very slowly and a dozen PA against lefties is nearly all noise."
+)
+st.markdown(
+    "Expected runs for a batting order come from an exact Markov chain over the 24 base-out "
+    "states, cycling through the order for 7 innings (the BBF game length), with fixed runner "
+    "advancement: walks force runners; a single scores runners from 2nd and 3rd and moves the "
+    "runner on 1st up one base; a double scores runners from 2nd and 3rd and sends the runner on "
+    "1st to 3rd; triples and homers clear the bases; outs advance nobody. There are no steals, "
+    "sacrifices, double plays, or errors in the model, and mercy/curfew rules are ignored — they "
+    "truncate blowouts roughly equally whichever order you bat in, so they change absolute run "
+    "totals, not which order is best. The search seeds a conventional order (best hitters in the "
+    "first four slots, on-base ahead of power) and hill-climbs over pairwise swaps with fixed "
+    "random restarts, so the same inputs always produce the same recommendation. Differences "
+    "between sensible orders are fractions of a run per game — the recommendation is a "
+    "tiebreaker, not a verdict."
+)
+st.markdown(
+    "The scouting PDF re-renders spray charts with the same fixed 90° fan geometry as the app's "
+    "own charts, and every table in it uses the same true-talent rankings and no-minimum-sample "
+    "matchup caveats described above."
+)
+
 st.divider()
 st.caption(
     "Spotted something that looks wrong, or have a question about how a stat is calculated? "

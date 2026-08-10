@@ -23,7 +23,7 @@ DB_URL = f"sqlite:///{DB_PATH}"
 
 BASE_URL = "https://stats.britishbaseball.org.uk"
 
-# This repo, used both by the Feedback page (app/pages/10_Feedback.py) to
+# This repo, used both by the Feedback page (app/pages/11_Feedback.py) to
 # file GitHub issues and by db/storage.py to publish/fetch data/stats.db as
 # a release asset. Feedback auth is a GITHUB_TOKEN secret (Community Cloud
 # dashboard or local .streamlit/secrets.toml); publishing auth is a

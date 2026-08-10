@@ -27,6 +27,7 @@ from db.models import (
     PlateAppearance,
     Player,
     PlayerSeason,
+    ScrapeLog,
     Season,
     Team,
     TeamSeason,
@@ -34,6 +35,9 @@ from db.models import (
 from stats.advanced_stats import era_plus, fip, wrc_plus
 from stats.advanced_stats import woba as compute_woba
 from stats.archetypes import fit_archetypes, k_diagnostics
+from stats.league_context import _league_batting_totals
+from stats.lineup import build_profile, league_component_rates, optimize_lineup, platoon_adjusted_woba
+from stats.probable_pitchers import probable_starters, staff_usage
 from stats.rate_stats import (
     avg,
     avg_risp,
@@ -1091,5 +1095,360 @@ def batter_pitcher_matchups_career(full_name: str, as_batter: bool) -> pd.DataFr
         ]
         df = pd.DataFrame(records)
         return df.sort_values("pa", ascending=False) if not df.empty else df
+    finally:
+        session.close()
+
+
+# --------------------------------------------------------------------------
+# Scouting report (app/pages/8_Scouting_Report.py)
+# --------------------------------------------------------------------------
+
+
+def _team_season_id(session, league_season_id: int, team_name: str) -> int | None:
+    return session.execute(
+        select(TeamSeason.id).where(
+            TeamSeason.league_season_id == league_season_id, TeamSeason.display_name == team_name
+        )
+    ).scalar_one_or_none()
+
+
+@st.cache_data
+def next_fixtures(league_season_id: int, team_name: str) -> pd.DataFrame:
+    """This team's not-yet-played games, soonest first — the schedule scrape
+    stores the whole season's fixtures up front (status "scheduled"), so
+    this is how the Scouting Report page defaults to the next opponent.
+    Empty for completed historical seasons."""
+    session = get_session()
+    try:
+        ts_id = _team_season_id(session, league_season_id, team_name)
+        if ts_id is None:
+            return pd.DataFrame()
+        home_ts, away_ts = aliased(TeamSeason), aliased(TeamSeason)
+        rows = session.execute(
+            select(
+                Game.game_date,
+                home_ts.display_name.label("home"),
+                away_ts.display_name.label("away"),
+                Game.venue,
+            )
+            .join(home_ts, home_ts.id == Game.home_team_season_id)
+            .join(away_ts, away_ts.id == Game.away_team_season_id)
+            .where(
+                Game.league_season_id == league_season_id,
+                Game.status == "scheduled",
+                or_(Game.home_team_season_id == ts_id, Game.away_team_season_id == ts_id),
+            )
+            .order_by(Game.game_date)
+        ).all()
+        return pd.DataFrame(
+            [
+                {
+                    "game_date": r.game_date,
+                    "opponent": r.away if r.home == team_name else r.home,
+                    "home_away": "Home" if r.home == team_name else "Away",
+                    "venue": r.venue,
+                }
+                for r in rows
+            ]
+        )
+    finally:
+        session.close()
+
+
+_SCOUTING_HITTER_COUNT_FIELDS = ["pa", "ab", "h", "doubles", "triples", "hr", "bb", "ibb", "hbp", "so", "sf", "sb"]
+
+
+@st.cache_data
+def scouting_hitters(league_season_id: int, team_name: str) -> pd.DataFrame:
+    """One team's hitters for the scouting report, best first — raw counting
+    stats plus rate stats, wOBA/wRC+, the shrinkage layer's true-talent wOBA
+    (the ranking key: observed wOBA on 15 PA is mostly noise), and the spray
+    tendency label. Raw counts are included because the lineup optimizer
+    builds its event profiles from them."""
+    session = get_session()
+    try:
+        ctx = _lg_context(session, league_season_id)
+        lg_woba = ctx.lg_woba if ctx else None
+        rows = session.execute(
+            select(BattingSeasonStats, Player.full_name, Player.bats, BattingTrueTalent, BatterSpraySeasonStats)
+            .join(PlayerSeason, PlayerSeason.id == BattingSeasonStats.player_season_id)
+            .join(Player, Player.id == PlayerSeason.player_id)
+            .join(TeamSeason, TeamSeason.id == PlayerSeason.team_season_id)
+            .outerjoin(BattingTrueTalent, BattingTrueTalent.player_season_id == PlayerSeason.id)
+            .outerjoin(BatterSpraySeasonStats, BatterSpraySeasonStats.player_season_id == PlayerSeason.id)
+            .where(TeamSeason.league_season_id == league_season_id, TeamSeason.display_name == team_name)
+        ).all()
+        records = []
+        for stats_row, full_name, bats, talent, spray in rows:
+            observed = compute_woba(stats_row)
+            records.append(
+                {
+                    "player": full_name,
+                    "bats": bats,
+                    **{f: getattr(stats_row, f) for f in _SCOUTING_HITTER_COUNT_FIELDS},
+                    **batting_rate_stats(stats_row),
+                    "woba": observed,
+                    "shrunk_woba": talent.shrunk_woba if talent else None,
+                    "wrc_plus": wrc_plus(observed, lg_woba),
+                    "tendency": spray.tendency_label if spray else None,
+                }
+            )
+        df = pd.DataFrame(records)
+        if df.empty:
+            return df
+        return df.sort_values(["shrunk_woba", "woba", "pa"], ascending=False, na_position="last").reset_index(
+            drop=True
+        )
+    finally:
+        session.close()
+
+
+@st.cache_data
+def scouting_pitching_staff(league_season_id: int, team_name: str) -> pd.DataFrame:
+    """One team's pitching staff ranked by probable-starter likelihood
+    (stats/probable_pitchers.py), with season rates, first-pitch-strike%,
+    and true-talent FIP attached for display. Relievers are included (score
+    0, at the bottom); `evidence` is filled for the top probable starters
+    only."""
+    session = get_session()
+    try:
+        ts_id = _team_season_id(session, league_season_id, team_name)
+        if ts_id is None:
+            return pd.DataFrame()
+        usage = staff_usage(session, ts_id)
+        if not usage:
+            return pd.DataFrame()
+        ctx = _lg_context(session, league_season_id)
+        fip_constant = ctx.fip_constant if ctx else None
+        evidence = {
+            row["player_season_id"]: row["evidence"] for row in probable_starters(session, ts_id, top_n=3)
+        }
+        records = []
+        for row in usage:
+            ps_id = row["player_season_id"]
+            detail = session.execute(
+                select(Player.full_name, Player.throws, PitchingSeasonStats, PitchingTrueTalent)
+                .select_from(PlayerSeason)
+                .join(Player, Player.id == PlayerSeason.player_id)
+                .outerjoin(PitchingSeasonStats, PitchingSeasonStats.player_season_id == PlayerSeason.id)
+                .outerjoin(PitchingTrueTalent, PitchingTrueTalent.player_season_id == PlayerSeason.id)
+                .where(PlayerSeason.id == ps_id)
+            ).first()
+            if detail is None:
+                continue
+            full_name, throws, season, talent = detail
+            rates = pitching_rate_stats(season) if season else {"ip": None, "era": None, "whip": None, "k9": None, "bb9": None}
+            records.append(
+                {
+                    "player": full_name,
+                    "throws": throws,
+                    "g": row["g"],
+                    "gs": row["gs"],
+                    "ip": outs_to_ip_display(row["outs"]),
+                    "team_ip_share": row["team_ip_share"],
+                    "sv": row["saves"],
+                    **{k: rates[k] for k in ("era", "whip", "k9", "bb9")},
+                    "fip": fip(season, fip_constant) if season else None,
+                    "shrunk_fip": talent.shrunk_fip if talent else None,
+                    "fps_pct": fps_pct(season.fps_strikes, season.fps_pa) if season else None,
+                    "so": season.so if season else 0,
+                    "bb": season.bb if season else 0,
+                    "bf": season.bf if season else 0,
+                    "last_date": row["last_date"],
+                    "score_share": row["score_share"],
+                    "confidence": row["confidence"] if row["gs"] > 0 else None,
+                    "evidence": evidence.get(ps_id),
+                }
+            )
+        return pd.DataFrame(records)
+    finally:
+        session.close()
+
+
+@st.cache_data
+def roster_vs_pitcher(league_season_id: int, team_name: str, pitcher_name: str) -> pd.DataFrame:
+    """Career batter-vs-pitcher history for every batter on `team_name`'s
+    current roster against one opposing pitcher, summed across every season
+    they've met (BatterPitcherMatchup rows carry no minimum sample size —
+    the UI/PDF must caveat small PA counts, same as the Player Page)."""
+    session = get_session()
+    try:
+        roster_player_ids = set(
+            session.execute(
+                select(PlayerSeason.player_id)
+                .join(TeamSeason, TeamSeason.id == PlayerSeason.team_season_id)
+                .where(TeamSeason.league_season_id == league_season_id, TeamSeason.display_name == team_name)
+            )
+            .scalars()
+            .all()
+        )
+        if not roster_player_ids:
+            return pd.DataFrame()
+        BatterSeason, BatterPlayer = aliased(PlayerSeason), aliased(Player)
+        PitcherSeason, PitcherPlayer = aliased(PlayerSeason), aliased(Player)
+        rows = session.execute(
+            select(BatterPitcherMatchup, BatterPlayer.full_name)
+            .join(BatterSeason, BatterSeason.id == BatterPitcherMatchup.batter_player_season_id)
+            .join(BatterPlayer, BatterPlayer.id == BatterSeason.player_id)
+            .join(PitcherSeason, PitcherSeason.id == BatterPitcherMatchup.pitcher_player_season_id)
+            .join(PitcherPlayer, PitcherPlayer.id == PitcherSeason.player_id)
+            .where(PitcherPlayer.full_name == pitcher_name, BatterPlayer.id.in_(roster_player_ids))
+        ).all()
+        by_batter: dict[str, dict[str, int]] = {}
+        for matchup, batter_name in rows:
+            entry = by_batter.setdefault(batter_name, {f: 0 for f in _MATCHUP_COUNT_FIELDS})
+            for f in _MATCHUP_COUNT_FIELDS:
+                entry[f] += getattr(matchup, f)
+        df = pd.DataFrame(
+            [
+                {"player": name, **totals, "avg": avg(totals["h"], totals["ab"])}
+                for name, totals in by_batter.items()
+            ]
+        )
+        return df.sort_values("pa", ascending=False).reset_index(drop=True) if not df.empty else df
+    finally:
+        session.close()
+
+
+def _vs_hand_woba_rows(session, player_names: list[str], throws: str, as_batter: bool) -> pd.DataFrame:
+    """Career PA totals and observed wOBA for each named player against
+    opponents of one handedness, from raw PlateAppearance rows. as_batter
+    selects which side of the PA the named players are on."""
+    own_season, own_player = aliased(PlayerSeason), aliased(Player)
+    opp_season, opp_player = aliased(PlayerSeason), aliased(Player)
+    own_col = PlateAppearance.batter_player_season_id if as_batter else PlateAppearance.pitcher_player_season_id
+    opp_col = PlateAppearance.pitcher_player_season_id if as_batter else PlateAppearance.batter_player_season_id
+    opp_hand = opp_player.throws if as_batter else opp_player.bats
+    component_fields = ["ab", "h", "doubles", "triples", "hr", "bb", "ibb", "hbp", "so", "sf"]
+    rows = session.execute(
+        select(
+            own_player.full_name,
+            func.count().label("pa"),
+            *[func.sum(getattr(PlateAppearance, f)).label(f) for f in component_fields],
+        )
+        .join(own_season, own_season.id == own_col)
+        .join(own_player, own_player.id == own_season.player_id)
+        .join(opp_season, opp_season.id == opp_col)
+        .join(opp_player, opp_player.id == opp_season.player_id)
+        .where(own_player.full_name.in_(player_names), opp_hand == throws)
+        .group_by(own_player.full_name)
+    ).all()
+    records = []
+    for row in rows:
+        components = SimpleNamespace(**{f: (getattr(row, f) or 0) for f in component_fields})
+        records.append({"player": row.full_name, "pa": row.pa, "woba": compute_woba(components)})
+    return pd.DataFrame(records)
+
+
+@st.cache_data
+def batters_vs_hand(player_names: list[str], throws: str) -> pd.DataFrame:
+    """Career vs-LHP/vs-RHP observed wOBA per named batter — the platoon
+    input the lineup optimizer shrinks toward each batter's overall talent
+    (stats/lineup.py: platoon_adjusted_woba)."""
+    session = get_session()
+    try:
+        return _vs_hand_woba_rows(session, player_names, throws, as_batter=True)
+    finally:
+        session.close()
+
+
+@st.cache_data
+def pitcher_vs_hands(pitcher_name: str) -> pd.DataFrame:
+    """Career opponent wOBA allowed by one pitcher, split by batter
+    handedness — one row per hand faced ("L"/"R"), for the scouting PDF's
+    pitcher blocks."""
+    session = get_session()
+    try:
+        frames = []
+        for hand in ("L", "R"):
+            df = _vs_hand_woba_rows(session, [pitcher_name], hand, as_batter=False)
+            if not df.empty:
+                df["vs_hand"] = hand
+                frames.append(df)
+        return pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
+    finally:
+        session.close()
+
+
+@st.cache_data
+def league_batting_component_totals(league_season_id: int) -> dict:
+    """League-wide batting counting totals for stats/lineup.py's
+    league_component_rates — reuses league_context's aggregation so the
+    lineup model and the published league context always agree."""
+    session = get_session()
+    try:
+        return _league_batting_totals(session, league_season_id)
+    finally:
+        session.close()
+
+
+@st.cache_data
+def lineup_recommendation(
+    league_season_id: int, team_name: str, player_names: list[str], vs_throws: str | None
+) -> dict:
+    """Assemble lineup-optimizer inputs for the selected batters and run the
+    optimization (stats/lineup.py). Returns {"result": LineupResult,
+    "profiles": DataFrame} — the DataFrame shows, per batter, what the
+    model actually believed (shrunk wOBA, platoon-adjusted target, event
+    rates), so the recommendation is auditable in the UI/PDF."""
+    hitters = scouting_hitters(league_season_id, team_name)
+    league_rates = league_component_rates(league_batting_component_totals(league_season_id))
+    ctx_woba = None
+    session = get_session()
+    try:
+        ctx = _lg_context(session, league_season_id)
+        ctx_woba = ctx.lg_woba if ctx else None
+    finally:
+        session.close()
+
+    vs_hand = batters_vs_hand(player_names, vs_throws) if vs_throws in ("L", "R") else pd.DataFrame()
+    vs_by_player = (
+        {r["player"]: (r["pa"], r["woba"]) for _, r in vs_hand.iterrows()} if not vs_hand.empty else {}
+    )
+    by_player = {r["player"]: r for _, r in hitters.iterrows()} if not hitters.empty else {}
+
+    profiles = []
+    audit_rows = []
+    for name in player_names:
+        row = by_player.get(name)
+        counts = (
+            {f: int(row[f]) for f in ("pa", "h", "doubles", "triples", "hr", "bb", "hbp")}
+            if row is not None
+            else {"pa": 0}
+        )
+        overall = None
+        if row is not None:
+            overall = row["shrunk_woba"] if pd.notna(row["shrunk_woba"]) else row["woba"]
+            overall = overall if pd.notna(overall) else ctx_woba
+        target = overall
+        vs_pa, vs_woba = vs_by_player.get(name, (0, None))
+        if target is not None and vs_throws in ("L", "R"):
+            target = platoon_adjusted_woba(target, vs_pa, vs_woba)
+        profile = build_profile(name, counts, league_rates, target)
+        profiles.append(profile)
+        audit_rows.append(
+            {
+                "player": name,
+                "pa": counts.get("pa", 0),
+                "shrunk_woba": overall,
+                "vs_hand_pa": vs_pa,
+                "vs_hand_woba": vs_woba,
+                "target_woba": profile.implied_woba,
+                "onbase": profile.p_onbase,
+                "power": profile.power,
+            }
+        )
+
+    result = optimize_lineup(profiles)
+    return {"result": result, "profiles": pd.DataFrame(audit_rows)}
+
+
+@st.cache_data
+def data_freshness() -> str | None:
+    """Timestamp of the most recent scrape, for the PDF header."""
+    session = get_session()
+    try:
+        latest = session.execute(select(func.max(ScrapeLog.fetched_at))).scalar()
+        return str(latest) if latest else None
     finally:
         session.close()

@@ -1,7 +1,10 @@
 # Plan: Opponent Scouting Reports + Lineup Optimizer
 
-Status: **design approved-pending-review — not yet implemented.**
-Target branch: `claude/scouting-reports-lineup-ebatuc`.
+Status: **implemented** on `claude/scouting-reports-lineup-ebatuc` — kept as the design
+record. Where the implementation deviated: pages were renumbered as planned but the game
+length is fixed at 7 innings (no UI toggle; user confirmed all games are 7 innings), the
+lineup optimizer orders exactly the hitters selected (min 9 warning) rather than a 9/10
+radio, and mercy rules are documented as deliberately ignored.
 
 ## Goal
 

@@ -10,8 +10,11 @@ import streamlit as st
 
 from app.components.theme import stat_label
 
-_TEXT_COLS = ["player", "team", "league", "opponent", "position", "home_away", "result", "score"]
-_DATE_COLS = ["game_date"]
+_TEXT_COLS = [
+    "player", "team", "league", "opponent", "position", "home_away", "result", "score",
+    "bats", "throws", "tendency", "confidence", "evidence", "venue", "vs_hand",
+]
+_DATE_COLS = ["game_date", "last_date"]
 _FORMATTED_COLS = {
     "avg": "%.3f", "obp": "%.3f", "slg": "%.3f", "ops": "%.3f", "iso": "%.3f", "woba": "%.3f",
     "wrc_plus": "%.0f", "war": "%.2f", "bb_pct": "percent", "k_pct": "percent",
@@ -23,6 +26,8 @@ _FORMATTED_COLS = {
     "pull_pct": "percent", "center_pct": "percent", "oppo_pct": "percent", "pull_minus_oppo": "percent",
     "singles_pct": "percent", "doubles_pct": "percent", "triples_pct": "percent", "hr_pct": "percent",
     "pc1": "%.2f", "pc2": "%.2f", "silhouette": "%.3f", "inertia": "%.1f",
+    "team_ip_share": "percent", "score_share": "percent", "target_woba": "%.3f",
+    "vs_hand_woba": "%.3f", "onbase": "%.3f", "power": "%.3f", "expected_runs": "%.2f",
 }
 
 
@@ -39,6 +44,13 @@ def _build(cols: list[str]) -> dict:
         else:
             config[col] = st.column_config.NumberColumn(label, format="%d")
     return config
+
+
+def column_config_for(df) -> dict:
+    """Column config derived from whatever columns a DataFrame actually has —
+    for pages (e.g. Scouting Report) whose tables don't correspond to one of
+    the fixed configs below."""
+    return _build(list(df.columns))
 
 
 BATTING_COLUMN_CONFIG = _build(
