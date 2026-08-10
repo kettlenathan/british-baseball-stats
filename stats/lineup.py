@@ -61,6 +61,7 @@ power), then hill-climb over pairwise swaps with a few seeded random
 restarts. The result is deterministic for the same inputs.
 """
 
+import math
 from dataclasses import dataclass, field
 from functools import lru_cache
 
@@ -361,6 +362,27 @@ def expected_runs(profiles: list[BatterProfile], innings: int = DEFAULT_INNINGS)
 # Order search
 # --------------------------------------------------------------------------
 
+LINEUP_SIZE = 9
+
+
+def select_starters(
+    profiles: list[BatterProfile], size: int = LINEUP_SIZE
+) -> tuple[list[BatterProfile], list[BatterProfile]]:
+    """Split the available hitters into (starters, bench): the `size` best
+    profiles start — "best" meaning the profile's implied wOBA, i.e. the
+    shrunk, platoon-adjusted quality estimate the optimizer itself runs on —
+    and everyone else goes to the bench. Both halves keep their original
+    relative order (ties broken by input position) so the output is
+    deterministic for the same inputs."""
+    if len(profiles) <= size:
+        return list(profiles), []
+    ranked = sorted(range(len(profiles)), key=lambda i: (-profiles[i].implied_woba, i))
+    starter_indices = set(ranked[:size])
+    starters = [p for i, p in enumerate(profiles) if i in starter_indices]
+    bench = [p for i, p in enumerate(profiles) if i not in starter_indices]
+    return starters, bench
+
+
 # "The Book"-style seed: your best hitters bat in the first four slots
 # (on-base ahead of power), your worst bat last. Expressed as which
 # quality-rank goes in each lineup slot: e.g. the best hitter (rank 0) bats
@@ -450,25 +472,87 @@ def optimize_lineup(
 
 
 def _rationales(profiles: list[BatterProfile], order: list[int]) -> list[str]:
-    """One honest sentence per slot, phrased from the profile itself (the
-    numbers the model actually saw), not from a fixed slot taxonomy."""
-    n = len(order)
+    """Fallback rationale built from the profiles alone, for callers with no
+    season stats to hand — prefer slot_rationales() (real box-score numbers)
+    wherever season lines are available."""
     onbase_rank = {idx: r for r, idx in enumerate(sorted(order, key=lambda i: -profiles[i].p_onbase))}
     power_rank = {idx: r for r, idx in enumerate(sorted(order, key=lambda i: -profiles[i].power))}
     woba_rank = {idx: r for r, idx in enumerate(sorted(order, key=lambda i: -profiles[i].implied_woba))}
-
-    def ordinal(r: int) -> str:
-        return {0: "best", 1: "2nd-best", 2: "3rd-best"}.get(r, f"{r + 1}th-best")
 
     lines = []
     for slot, idx in enumerate(order, start=1):
         p = profiles[idx]
         traits = []
         if onbase_rank[idx] <= 2:
-            traits.append(f"{ordinal(onbase_rank[idx])} on-base rate ({p.p_onbase:.3f})")
+            traits.append(f"{_ordinal(onbase_rank[idx])} projected on-base rate ({p.p_onbase:.3f})")
         if power_rank[idx] <= 2:
-            traits.append(f"{ordinal(power_rank[idx])} extra-base power")
+            traits.append(f"{_ordinal(power_rank[idx])} projected extra-base power")
         if not traits:
-            traits.append(f"{ordinal(woba_rank[idx])} overall profile (wOBA {p.implied_woba:.3f}) of the {n} selected")
+            traits.append(f"{_ordinal(woba_rank[idx])} overall bat of this nine")
         lines.append(f"{slot}. {p.name} — " + ", ".join(traits) + ".")
+    return lines
+
+
+def _ordinal(rank: int) -> str:
+    return {0: "best", 1: "2nd-best", 2: "3rd-best"}.get(rank, f"{rank + 1}th-best")
+
+
+# Traits considered for the per-slot rationale, in priority order: (stat
+# key, higher-is-better, phrasing). K% is the one lower-is-better entry.
+_TRAIT_SPECS = [
+    ("obp", True, lambda v, o: f"{o} OBP in this lineup ({v:.3f})"),
+    ("iso", True, lambda v, o: f"{o.replace('best', 'most')} extra-base power (ISO {v:.3f})"),
+    ("k_pct", False, lambda v, o: f"{o.replace('best', 'hardest')} to strike out ({v:.0%} K rate)"),
+    ("sb", True, lambda v, o: f"{o.replace('best', 'most')} stolen bases ({v:.0f} SB)"),
+    ("bb_pct", True, lambda v, o: f"{o} walk rate ({v:.0%} of PA)"),
+]
+
+
+def slot_rationales(order: list[str], stats_by_name: dict[str, dict]) -> list[str]:
+    """One line per lineup slot, phrased in ordinary box-score stats (OBP,
+    ISO, K%, SB, BB%) so the recommendation is traceable to numbers a coach
+    already knows — never model internals like scaled wOBA, which all look
+    alike. Each hitter is described by the traits where they rank top-3
+    *within this specific nine*, so the line answers "why this hitter here,
+    relative to the other eight". stats_by_name values may contain pa, avg,
+    obp, slg, iso, bb_pct, k_pct, sb (any may be missing/None)."""
+
+    def value(name: str, key: str):
+        v = stats_by_name.get(name, {}).get(key)
+        return None if v is None or (isinstance(v, float) and math.isnan(v)) else v
+
+    ranks: dict[str, dict[str, int]] = {key: {} for key, _, _ in _TRAIT_SPECS}
+    for key, higher_better, _ in _TRAIT_SPECS:
+        scored = [(name, value(name, key)) for name in order]
+        scored = [(name, v) for name, v in scored if v is not None]
+        scored.sort(key=lambda nv: -nv[1] if higher_better else nv[1])
+        ranks[key] = {name: r for r, (name, v) in enumerate(scored)}
+
+    lines = []
+    for slot, name in enumerate(order, start=1):
+        stats = stats_by_name.get(name, {})
+        pa = stats.get("pa") or 0
+        if not pa:
+            lines.append(f"{slot}. {name} — no season data yet; projected as a league-average bat.")
+            continue
+        traits = []
+        for key, _, phrase in _TRAIT_SPECS:
+            rank = ranks[key].get(name)
+            v = value(name, key)
+            if rank is not None and rank <= 2 and v is not None:
+                # Zero steals or an ISO of .000 isn't a strength even if it
+                # technically ranks — only claim traits with substance.
+                if key == "sb" and v < 2:
+                    continue
+                if key == "iso" and v < 0.05:
+                    continue
+                traits.append(phrase(v, _ordinal(rank)))
+            if len(traits) == 2:
+                break
+        if not traits:
+            obp, slg = value(name, "obp"), value(name, "slg")
+            line_bits = [f"{obp:.3f} OBP" if obp is not None else None, f"{slg:.3f} SLG" if slg is not None else None]
+            summary = " / ".join(b for b in line_bits if b) or "limited data"
+            traits.append(f"steady bat ({summary} over {pa} PA)")
+        lines.append(f"{slot}. {name} — " + ", ".join(traits) + ".")
     return lines

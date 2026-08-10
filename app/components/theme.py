@@ -94,6 +94,9 @@ STAT_LABELS = {
     "g": "G", "gs": "GS", "team_ip_share": "IP Share", "bats": "Bats", "throws": "Throws",
     "tendency": "Tendency", "confidence": "Confidence", "venue": "Venue",
     "shrunk_woba_target": "Adjusted wOBA", "expected_runs": "Expected Runs",
+    "slot": "Slot", "role": "Role",
+    "avg_vs_lhp": "AVG vs LHP", "pa_vs_lhp": "PA vs LHP",
+    "avg_vs_rhp": "AVG vs RHP", "pa_vs_rhp": "PA vs RHP",
 }
 
 STAT_FORMAT = {
@@ -113,6 +116,7 @@ STAT_FORMAT = {
     "singles_pct": ".1%", "doubles_pct": ".1%", "triples_pct": ".1%", "hr_pct": ".1%",
     "pc1": ".2f", "pc2": ".2f", "silhouette": ".3f", "inertia": ".1f",
     "g": ",.0f", "gs": ",.0f", "team_ip_share": ".0%", "expected_runs": ".2f",
+    "slot": ",.0f", "avg_vs_lhp": ".3f", "pa_vs_lhp": ",.0f", "avg_vs_rhp": ".3f", "pa_vs_rhp": ",.0f",
 }
 
 

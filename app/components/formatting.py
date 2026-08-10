@@ -12,7 +12,7 @@ from app.components.theme import stat_label
 
 _TEXT_COLS = [
     "player", "team", "league", "opponent", "position", "home_away", "result", "score",
-    "bats", "throws", "tendency", "confidence", "evidence", "venue", "vs_hand",
+    "bats", "throws", "tendency", "confidence", "evidence", "venue", "vs_hand", "role",
 ]
 _DATE_COLS = ["game_date", "last_date"]
 _FORMATTED_COLS = {
@@ -28,6 +28,7 @@ _FORMATTED_COLS = {
     "pc1": "%.2f", "pc2": "%.2f", "silhouette": "%.3f", "inertia": "%.1f",
     "team_ip_share": "percent", "score_share": "percent", "target_woba": "%.3f",
     "vs_hand_woba": "%.3f", "onbase": "%.3f", "power": "%.3f", "expected_runs": "%.2f",
+    "avg_vs_lhp": "%.3f", "avg_vs_rhp": "%.3f",
 }
 
 

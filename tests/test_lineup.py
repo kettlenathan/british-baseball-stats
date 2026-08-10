@@ -8,6 +8,8 @@ from stats.lineup import (
     league_component_rates,
     optimize_lineup,
     platoon_adjusted_woba,
+    select_starters,
+    slot_rationales,
 )
 
 # A plausible amateur-league environment: totals shaped like a real
@@ -128,3 +130,35 @@ def test_optimize_lineup_empty():
     result = optimize_lineup([])
     assert result.order == []
     assert result.expected_runs == 0.0
+
+
+def test_select_starters_takes_best_nine_and_benches_rest():
+    wobas = [0.300, 0.450, 0.320, 0.410, 0.350, 0.280, 0.390, 0.310, 0.330, 0.250, 0.420]
+    profiles = [_profile_with_woba(f"P{i}", w) for i, w in enumerate(wobas)]
+    starters, bench = select_starters(profiles)
+    assert len(starters) == 9
+    # The two weakest bats (P9 at .250, P5 at .280) sit.
+    assert sorted(p.name for p in bench) == ["P5", "P9"]
+    # With nine or fewer, everyone starts.
+    starters, bench = select_starters(profiles[:9])
+    assert len(starters) == 9
+    assert bench == []
+
+
+def test_slot_rationales_use_box_score_stats():
+    order = ["Table Setter", "Slugger", "Rookie"]
+    stats = {
+        "Table Setter": {"pa": 60, "avg": 0.320, "obp": 0.450, "slg": 0.400, "iso": 0.080,
+                         "bb_pct": 0.18, "k_pct": 0.10, "sb": 6},
+        "Slugger": {"pa": 55, "avg": 0.300, "obp": 0.380, "slg": 0.640, "iso": 0.340,
+                    "bb_pct": 0.10, "k_pct": 0.25, "sb": 0},
+        "Rookie": {"pa": 0},
+    }
+    lines = slot_rationales(order, stats)
+    assert len(lines) == 3
+    assert lines[0].startswith("1. Table Setter")
+    assert "OBP" in lines[0] and "0.450" in lines[0]
+    assert "extra-base power" in lines[1] and "0.340" in lines[1]
+    # No model internals anywhere.
+    assert not any("wOBA" in line for line in lines)
+    assert "no season data" in lines[2]

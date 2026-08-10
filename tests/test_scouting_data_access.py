@@ -226,12 +226,39 @@ def test_lineup_recommendation_end_to_end(session):
     ls = _fixture(session)
     out = data_access.lineup_recommendation(ls.id, "Us", ["Our Batter", "Unknown Sub"], vs_throws="L")
     result = out["result"]
+    # Nine or fewer available: everyone plays, nobody benched.
     assert sorted(result.order) == ["Our Batter", "Unknown Sub"]
     assert result.expected_runs > 0
+    assert out["bench"].empty
+    lineup = out["lineup"]
+    assert list(lineup["slot"]) == [1, 2]
+    assert set(lineup["player"]) == {"Our Batter", "Unknown Sub"}
+    # The lineup table explains slots in box-score stats, not model values.
+    assert {"avg", "obp", "slg", "k_pct"} <= set(lineup.columns)
+    # Rationale is phrased from season stats / lack thereof, never wOBA.
+    assert any("no season data" in line for line in result.rationale)
+    assert not any("wOBA" in line for line in result.rationale)
     profiles = out["profiles"]
     assert len(profiles) == 2
-    # The unknown sub got no season data: league-average target.
     sub = profiles[profiles["player"] == "Unknown Sub"].iloc[0]
     assert sub["pa"] == 0
     known = profiles[profiles["player"] == "Our Batter"].iloc[0]
     assert known["vs_hand_pa"] == 1
+
+
+def test_lineup_recommendation_benches_beyond_nine(session):
+    ls = _fixture(session)
+    subs = [f"Sub {i}" for i in range(10)]
+    out = data_access.lineup_recommendation(ls.id, "Us", ["Our Batter", *subs], vs_throws="L")
+    result = out["result"]
+    # Exactly nine start; Our Batter (above-league talent) must be among them.
+    assert len(result.order) == 9
+    assert "Our Batter" in result.order
+    assert len(out["lineup"]) == 9
+    bench = out["bench"]
+    assert len(bench) == 2
+    assert set(bench["player"]) <= set(subs)
+    # Someone is named first bat off the bench for each hand.
+    roles = " ".join(bench["role"])
+    assert "vs LHP" in roles
+    assert "vs RHP" in roles

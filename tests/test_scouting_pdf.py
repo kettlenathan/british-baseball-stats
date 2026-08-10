@@ -94,6 +94,29 @@ def _full_data() -> dict:
                 baselines={"recommended": 5.4, "by_woba_desc": 5.3, "as_selected": 5.1},
                 rationale=[f"{i}. Player — placeholder rationale." for i in range(1, 10)],
             ),
+            "lineup": pd.DataFrame(
+                [
+                    {
+                        "slot": i, "player": name, "pa": 30 + i, "avg": 0.280, "obp": 0.350,
+                        "slg": 0.400, "iso": 0.120, "bb_pct": 0.10, "k_pct": 0.20, "sb": 1,
+                    }
+                    for i, name in enumerate("ABCDEFGHI", start=1)
+                ]
+            ),
+            "bench": pd.DataFrame(
+                [
+                    {
+                        "player": "J", "role": "First bat off the bench vs LHP", "pa": 12, "avg": 0.250,
+                        "obp": 0.300, "iso": 0.050, "k_pct": 0.30,
+                        "avg_vs_lhp": 0.400, "pa_vs_lhp": 5, "avg_vs_rhp": 0.150, "pa_vs_rhp": 7,
+                    },
+                    {
+                        "player": "K", "role": "First bat off the bench vs RHP", "pa": 10, "avg": 0.220,
+                        "obp": 0.280, "iso": 0.000, "k_pct": 0.35,
+                        "avg_vs_lhp": None, "pa_vs_lhp": 0, "avg_vs_rhp": 0.300, "pa_vs_rhp": 10,
+                    },
+                ]
+            ),
             "vs_throws": "L",
         },
     }
