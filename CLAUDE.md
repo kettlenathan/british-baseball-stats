@@ -183,7 +183,12 @@ writes back upstream.
   operators are collapsed to 24×24 matrices and lru_cached (profiles are frozen dataclasses)
   — this is what makes optimize_lineup fast enough (~1.5s) to run live in the page. When more
   than 9 hitters are available, `select_starters` starts the 9 best adjusted bats and the rest
-  are benched with best-pinch-hit-vs-LHP/RHP roles (both hands rated per player). User-facing
+  are benched with best-pinch-hit-vs-LHP/RHP roles (both hands rated per player). Every
+  pick-between-players ranking (starters, bench roles) uses `conservative_woba` — the estimate
+  minus a penalty of sd/sqrt(own PA + floor) — because shrinkage parks near-empty samples at
+  league average, which would otherwise let an 0-for-7 bat out-rank a proven 60-PA hitter; and
+  no one is *named* a best/first-choice option (roles, per-slot stat claims) under
+  `MIN_PA_FOR_JUDGEMENT` (20) season PA — they're marked "too few PA to judge". User-facing
   rationale comes from `slot_rationales` and is deliberately phrased in box-score stats
   (OBP/ISO/K%/SB ranked within the chosen nine), never shrunk-wOBA internals — those live only
   in the page's "under the hood" audit table.

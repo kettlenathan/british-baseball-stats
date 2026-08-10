@@ -3,6 +3,7 @@ import pytest
 from stats.lineup import (
     BatterProfile,
     build_profile,
+    conservative_woba,
     expected_runs,
     heuristic_order,
     league_component_rates,
@@ -143,6 +144,33 @@ def test_select_starters_takes_best_nine_and_benches_rest():
     starters, bench = select_starters(profiles[:9])
     assert len(starters) == 9
     assert bench == []
+
+
+def test_conservative_woba_penalizes_small_samples():
+    # Same point estimate: more PA means a higher (less penalized) score.
+    assert conservative_woba(0.340, 60) > conservative_woba(0.340, 7)
+    # The Enzo case: 0-for-7's near-league shrunk estimate loses to a real
+    # 60-PA track record of being slightly below average.
+    assert conservative_woba(0.300, 60) > conservative_woba(0.320, 7)
+    # But a genuinely strong 20-PA start still beats a mediocre veteran —
+    # the penalty tempers small samples without burying them.
+    assert conservative_woba(0.420, 20) > conservative_woba(0.320, 60)
+    assert conservative_woba(None, 50) is None
+
+
+def test_slot_rationales_small_sample_gets_no_claims():
+    order = ["Table Setter", "Hot Start"]
+    stats = {
+        "Table Setter": {"pa": 60, "avg": 0.320, "obp": 0.450, "slg": 0.400, "iso": 0.080,
+                         "bb_pct": 0.18, "k_pct": 0.10, "sb": 6},
+        # 8 PA of a .600 OBP: must neither be cited nor steal the OBP rank.
+        "Hot Start": {"pa": 8, "avg": 0.500, "obp": 0.600, "slg": 0.900, "iso": 0.400,
+                      "bb_pct": 0.25, "k_pct": 0.0, "sb": 2},
+    }
+    lines = slot_rationales(order, stats)
+    assert "best OBP" in lines[0] and "0.450" in lines[0]
+    assert "only 8 PA" in lines[1] and "too few to judge" in lines[1]
+    assert "0.600" not in lines[1]
 
 
 def test_slot_rationales_use_box_score_stats():
