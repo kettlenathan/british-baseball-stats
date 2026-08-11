@@ -31,6 +31,10 @@ BASE_URL = "https://stats.britishbaseball.org.uk"
 # never committed either way.
 GITHUB_REPO = "kettlenathan/british-baseball-stats"
 
+# Optional tip jar, linked from the Back Page. Nothing depends on it — the app
+# has no paid tier and no server costs to cover (Community Cloud hosts it free).
+DONATION_URL = "https://buymeacoffee.com/nathankettle"
+
 
 def is_deployed() -> bool:
     """True only when the Community Cloud dashboard's Secrets box sets
