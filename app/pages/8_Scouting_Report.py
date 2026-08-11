@@ -12,6 +12,7 @@ from app.components.data_access import (
     batter_spray_points,
     batter_tendency,
     data_freshness,
+    league_fielding_by_position,
     lineup_recommendation,
     list_league_seasons,
     next_fixtures,
@@ -21,6 +22,8 @@ from app.components.data_access import (
     scouting_hitters,
     scouting_pitching_staff,
     standings,
+    team_fielding_by_position,
+    team_position_error_players,
     team_recent_games,
     team_roster,
     team_season_stats,
@@ -138,6 +141,55 @@ with st.expander(f"{opponent}: hitters", expanded=False):
         if len(season_points) >= 25:
             st.caption("This season, direction density")
             st.plotly_chart(spray_heatmap(season_points), use_container_width=True, key="scout_spray_heat")
+
+# --------------------------------------------------------------------------
+# Opponent defence
+# --------------------------------------------------------------------------
+
+st.subheader(f"{opponent}: defence by position")
+st.caption(
+    "Where they give away outs. Compared against the average team's errors at the *same* position, "
+    "since shortstops and third basemen out-error corner outfielders on every team."
+)
+
+opponent_defense = team_fielding_by_position(league_season_id, opponent)
+if not opponent_defense.empty:
+    league_defense = league_fielding_by_position(league_season_id)
+    if not league_defense.empty and "e_per_team" in league_defense.columns:
+        opponent_defense = opponent_defense.merge(
+            league_defense[["position", "e_per_team"]], on="position", how="left"
+        )
+        opponent_defense["e_vs_league"] = opponent_defense["e"] - opponent_defense["e_per_team"]
+
+defense_error_players = team_position_error_players(league_season_id, opponent)
+
+if opponent_defense.empty:
+    st.info("No fielding data for this opponent yet.")
+else:
+    st.dataframe(
+        opponent_defense,
+        hide_index=True,
+        use_container_width=True,
+        column_config=column_config_for(opponent_defense),
+    )
+    if "e_vs_league" in opponent_defense.columns:
+        weak = opponent_defense[opponent_defense["e_vs_league"] > 0].sort_values(
+            "e_vs_league", ascending=False
+        )
+        if not weak.empty:
+            spots = ", ".join(
+                f"**{r.position}** ({int(r.e)} E, {r.e_vs_league:+.1f} vs league)"
+                for r in weak.head(3).itertuples()
+            )
+            st.markdown(f"Worth testing: {spots}.")
+    if not defense_error_players.empty:
+        with st.expander("Who makes their errors"):
+            st.dataframe(
+                defense_error_players,
+                hide_index=True,
+                use_container_width=True,
+                column_config=column_config_for(defense_error_players),
+            )
 
 st.divider()
 
@@ -271,6 +323,8 @@ if st.button("Generate PDF", type="primary"):
                 "recent_games": team_recent_games(league_season_id, opponent),
                 "hitters": hitters,
                 "hitter_details": hitter_details,
+                "defense": opponent_defense,
+                "defense_error_players": defense_error_players,
                 "staff": staff,
                 "pitcher_details": pitcher_details,
                 "lineup": (

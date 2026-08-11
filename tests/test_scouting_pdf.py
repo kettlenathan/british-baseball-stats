@@ -72,6 +72,20 @@ def _full_data() -> dict:
             # A hitter with no batted-ball data must render a placeholder, not crash.
             {"name": "Scrub", "note": None, "season_points": _POINTS.iloc[0:0], "career_points": _POINTS.iloc[0:0]},
         ],
+        "defense": pd.DataFrame(
+            [
+                {"position": "SS", "g": 14, "po": 20, "a": 30, "e": 9, "dp": 3, "fpct": 0.847,
+                 "e_per_team": 5.0, "e_vs_league": 4.0},
+                {"position": "CF", "g": 14, "po": 25, "a": 1, "e": 0, "dp": 0, "fpct": 1.0,
+                 "e_per_team": 1.5, "e_vs_league": -1.5},
+                # Unattributed errors still render rather than being dropped.
+                {"position": "UNK", "g": 1, "po": 0, "a": 0, "e": 1, "dp": 0, "fpct": 0.0,
+                 "e_per_team": 0.4, "e_vs_league": 0.6},
+            ]
+        ),
+        "defense_error_players": pd.DataFrame(
+            [{"position": "SS", "player": "Butterfingers", "g": 12, "po": 18, "a": 25, "e": 8, "fpct": 0.843}]
+        ),
         "staff": staff,
         "pitcher_details": [
             {
@@ -133,6 +147,19 @@ def test_full_report_builds():
     pdf = build_scouting_pdf(_full_data())
     assert pdf[:5] == b"%PDF-"
     assert len(pdf) > 20_000  # several pages with embedded charts
+
+
+def test_report_builds_without_a_defence_section():
+    # An opponent with no fielding data at all, and one whose league
+    # comparison couldn't be computed — neither should break the build.
+    data = _full_data()
+    data["defense"] = pd.DataFrame()
+    data["defense_error_players"] = pd.DataFrame()
+    assert build_scouting_pdf(data)[:5] == b"%PDF-"
+
+    data = _full_data()
+    data["defense"] = data["defense"].drop(columns=["e_per_team", "e_vs_league"])
+    assert build_scouting_pdf(data)[:5] == b"%PDF-"
 
 
 def test_minimal_report_degrades_gracefully():

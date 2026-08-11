@@ -213,6 +213,51 @@ st.markdown(
 
 st.divider()
 
+st.subheader("Errors by position")
+st.markdown(
+    "The Team Page, Player Page and Scouting Report break errors down by fielding position. "
+    "Getting there takes two sources, because neither one is sufficient alone."
+)
+st.markdown(
+    "**Where the totals come from**: the box score records each player's putouts, assists, "
+    "errors and double plays per game, alongside a position field. Those totals are "
+    "authoritative — summed per team they match the site's own published team error count in "
+    "**99%** of team-games — so they're what every number here reconciles to."
+)
+st.markdown(
+    "**Where the position comes from**: the box score's position field is a *path*, not a single "
+    "position — a player who moved from shortstop to the mound mid-game is recorded as `SS/P`, "
+    "with one combined error total. About **81%** of errors sit in a record naming exactly one "
+    "position and are attributed directly. For the other 19%, the play-by-play commentary is "
+    "parsed for standard scorer's notation (`E6` for a fielding error by the shortstop, `E4T` "
+    "for a throwing error by the second baseman), which resolves **94%** of them. Putouts, "
+    "assists and double plays on those split records are credited to the first position named — "
+    "the position the player started that stint at — which is the one approximation involved, "
+    "and it never affects error counts."
+)
+st.markdown(
+    "**UNK**: roughly **1.5%** of errors are placed by neither source. They're shown as `UNK` "
+    "rather than dropped or guessed at, so the per-position rows always add up to the team's "
+    "and player's real error totals."
+)
+st.markdown(
+    "**Why the play-by-play isn't used for the counts themselves**: its error notation misses "
+    "errors on stolen-base throws and runner advancement, and disagrees with the box score's own "
+    "totals in about half of team-games. It's reliable for *which position* an error belongs to "
+    "and unreliable for *how many* there were, so it's used only for the former."
+)
+st.warning(
+    "**Errors are not a fielding-quality metric.** They have no opportunity denominator here — "
+    "there are no innings-by-position, no batted-ball locations relative to where a fielder was "
+    "standing, and no record of balls a fielder never reached. A player with poor range records "
+    "*fewer* errors, not more, and shortstops and third basemen out-error corner outfielders on "
+    "every team, so the only meaningful comparison is against the same position elsewhere in the "
+    "league (the \"E vs League\" column). Fielding % inherits the same weakness. This is why "
+    "**WAR here has no defensive component at all** — see above."
+)
+
+st.divider()
+
 st.subheader("Batter archetypes")
 st.markdown(
     "The Batter Archetypes page groups batters within one league-season using unsupervised "

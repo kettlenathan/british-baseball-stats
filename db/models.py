@@ -258,6 +258,41 @@ class PitchingGameLine(Base):
     save: Mapped[bool] = mapped_column(Boolean, default=False)
 
 
+class FieldingGameLine(Base):
+    """One row per (game, player, position played) — the per-position
+    breakdown of the fielding totals BattingGameLine already stores for the
+    same player-game, so summing these across positions reproduces that row's
+    field_po/field_a/field_e/field_dp exactly.
+
+    This table exists because the box score's own `pos` is a *slash-joined
+    path* of the positions occupied during one stint ("SS/P", "2B/P/P"), while
+    the fielding counts on that record are a single total — so the raw payload
+    attributes 19% of errors to no single position. See
+    scraper/scrape_boxscores.py:_extract_fielding_lines for the attribution
+    rule (narrative E<n> tokens split a multi-position record's errors;
+    PO/A/DP go to the first position named) and docs/fielding_metrics_plan.md
+    for the measurements behind it.
+
+    Populated only by scraper/; `position` is "UNK" for the residual errors
+    that neither source could place.
+    """
+
+    __tablename__ = "fielding_game_lines"
+    __table_args__ = (UniqueConstraint("game_id", "player_season_id", "position"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    game_id: Mapped[int] = mapped_column(ForeignKey("games.id"), index=True)
+    player_season_id: Mapped[int] = mapped_column(ForeignKey("player_seasons.id"), index=True)
+    team_season_id: Mapped[int] = mapped_column(ForeignKey("team_seasons.id"), index=True)
+
+    position: Mapped[str] = mapped_column(String, index=True)
+    appearances: Mapped[int] = mapped_column(Integer, default=0)
+    po: Mapped[int] = mapped_column(Integer, default=0)
+    a: Mapped[int] = mapped_column(Integer, default=0)
+    e: Mapped[int] = mapped_column(Integer, default=0)
+    dp: Mapped[int] = mapped_column(Integer, default=0)
+
+
 class PlateAppearance(Base):
     """One row per completed plate appearance, parsed from the box score's
     `gamePlays` play-by-play feed alongside RISP/LOB (see
@@ -382,6 +417,28 @@ class PitchingSeasonStats(Base):
     # see stats/aggregation.py.
     fps_pa: Mapped[int] = mapped_column(Integer, default=0)
     fps_strikes: Mapped[int] = mapped_column(Integer, default=0)
+    computed_at: Mapped[dt.datetime] = mapped_column(DateTime, default=_now)
+
+
+class FieldingSeasonStats(Base):
+    """One row per (player_season, position) — FieldingGameLine summed over a
+    season. Team-level "errors by position" is summed from these at read time
+    in app/components/data_access.py, the same way team batting/pitching
+    totals are, rather than materialized as a third table."""
+
+    __tablename__ = "fielding_season_stats"
+    __table_args__ = (UniqueConstraint("player_season_id", "position"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    player_season_id: Mapped[int] = mapped_column(ForeignKey("player_seasons.id"), index=True)
+    position: Mapped[str] = mapped_column(String, index=True)
+
+    games: Mapped[int] = mapped_column(Integer, default=0)
+    appearances: Mapped[int] = mapped_column(Integer, default=0)
+    po: Mapped[int] = mapped_column(Integer, default=0)
+    a: Mapped[int] = mapped_column(Integer, default=0)
+    e: Mapped[int] = mapped_column(Integer, default=0)
+    dp: Mapped[int] = mapped_column(Integer, default=0)
     computed_at: Mapped[dt.datetime] = mapped_column(DateTime, default=_now)
 
 

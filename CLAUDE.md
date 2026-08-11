@@ -65,7 +65,17 @@ writes back upstream.
   — several of this league's per-pitch fields are confirmed always zero and unusable
   (`ball`/`called`/`swing`/`foul`/`inplay`, and true `hitx`/`hity`/`exitvelo` coordinates), so
   first-pitch-strike is derived by diffing `balls`/`strikes` counts between pitches instead of
-  reading a flag — see `_first_pitch_strike`'s docstring for the exact logic.
+  reading a flag — see `_first_pitch_strike`'s docstring for the exact logic. The same feed's
+  free-text `narrative` is parsed for scorer's error notation (`E6`, `E4T`) by
+  `_extract_narrative_errors`, which is the **only** place a fielder's position on an error is
+  recorded (`errortype` is another dead always-zero field, and no play record names the
+  fielder). `_extract_fielding_lines` combines that with the box score's own `pos` to write
+  `FieldingGameLine` — see `docs/fielding_metrics_plan.md` for the measurements behind the
+  attribution rule, and note the two sources have opposite strengths: the box score is
+  authoritative for *how many* errors (matching the site's own team totals 99% of the time)
+  and ambiguous about *which position* (19% of errors sit in a slash-joined `pos` path like
+  `SS/P`), while the narrative is exact about position and misses ~half of team-games' error
+  counts entirely. Never swap those roles.
 - `http_client.py` — plain `httpx` GETs work for everything (no headless browser needed at
   runtime); a browser `User-Agent` header is required or CloudFront 403s. Most pages embed
   data as an Inertia.js `data-page` JSON blob, extracted via a real HTML parser (not regex,
@@ -97,12 +107,20 @@ writes back upstream.
   1. **Dimensions** — League/Season/LeagueSeason (one league's instance in one year),
      Team/TeamSeason (a team's participation in one league_season — this is what the site's
      own `teamid` actually identifies), Player/PlayerSeason.
-  2. **Facts** — Game, BattingGameLine, PitchingGameLine, PlateAppearance — written only by
-     `scraper/`.
-  3. **Derived/materialized** — BattingSeasonStats, PitchingSeasonStats,
+  2. **Facts** — Game, BattingGameLine, PitchingGameLine, PlateAppearance, FieldingGameLine —
+     written only by `scraper/`.
+  3. **Derived/materialized** — BattingSeasonStats, PitchingSeasonStats, FieldingSeasonStats,
      LeagueSeasonContext, BattingWar, PitchingWar, BatterSpraySeasonStats,
      BatterPitcherMatchup — written only by `stats/`, safe to drop and rebuild at any time
      from fact rows.
+- `FieldingGameLine` is a strict per-position *breakdown* of the fielding totals
+  `BattingGameLine` already stores for the same player-game (which stay as they are): summing
+  its rows reproduces those totals exactly, so a by-position view can never contradict the
+  team/player totals the site itself publishes. `position` is `"UNK"` for the ~1.5% of errors
+  neither source could place — surfaced in the UI rather than dropped, precisely so the
+  positions keep adding up. Unlike the other ingestion writes it is delete-then-insert per
+  game rather than a pure upsert, since which `(player, position)` rows a game produces
+  depends on the attribution rule and a changed rule would otherwise strand old rows.
 - Player identity: the site's `playerid` is confirmed stable platform-wide, so
   `players.source_id` uses it directly — no name-collision dedup needed. Team identity is
   *not* trusted to be stable across years (`teamid` is scoped per competition-instance), so
@@ -121,8 +139,11 @@ writes back upstream.
 ### `stats/`
 - `recompute.py` orchestrates the derivation pipeline in dependency order: aggregation
   (game lines → season totals, including pitchers' first-pitch-strike% rollup from
-  `PlateAppearance`) → league context → batter spray tendency → batter/pitcher matchups →
+  `PlateAppearance` and the per-position fielding rollup from `FieldingGameLine`) → league
+  context → batter spray tendency → batter/pitcher matchups →
   WAR. Never touches raw fact tables; safe to re-run any time after new games are scraped.
+  `aggregate_fielding`'s position in that order is arbitrary — nothing downstream reads
+  `FieldingSeasonStats`, it feeds only the app's errors-by-position views.
 - `constants.py` — fixed sabermetric linear-weight coefficients (wOBA weights, FIP weights)
   from published research (Tom Tango et al.), treated as stable across run environments.
 - `advanced_stats.py` — wOBA/wRC+/FIP/ERA+ formulas themselves, combining `constants.py`
@@ -243,7 +264,15 @@ writes back upstream.
   fielding + situational, via `data_access.team_season_stats`) and its last 3 weekends of
   games (`data_access.team_recent_games` — "weekends" relative to that team's own most recent
   game in the selected league_season, not real wall-clock today, since historical seasons
-  have no games near today) above the roster.
+  have no games near today) above the roster, plus errors by position
+  (`data_access.team_fielding_by_position` / `team_position_error_players`).
+- Every errors-by-position view pairs the team's raw count with
+  `data_access.league_fielding_by_position`'s per-team average **at the same position**, and
+  the pages say so in a caption: shortstops and third basemen out-error corner outfielders on
+  every team, so a bare error count is unreadable and invites the wrong conclusion. The same
+  captions state that error counts have no opportunity denominator and that fielding % rewards
+  limited range — keep that framing if these sections change, since the underlying data can't
+  support a defensive-skill claim (see `stats/war.py` staying offense-only).
 - `app/pages/5_Player_Comparison.py` and `app/pages/6_Team_Comparison.py` let a user pick
   2+ players or 1+ teams (via `filters.py`'s `player_multiselect`/`team_multiselect`) and see
   them side by side — batting and pitching career tables/trend charts for players, a
@@ -269,7 +298,9 @@ writes back upstream.
   PDF detail depth: top 6 hitters (≥20 PA) get spray-chart blocks, top 3 probable pitchers
   get full blocks including `roster_vs_pitcher` (your batters' career history vs them).
   `formatting.py:column_config_for(df)` exists for this page's tables (derive config from
-  whatever columns are present rather than a fixed list).
+  whatever columns are present rather than a fixed list). A "their defence" section (page +
+  PDF) shows the opponent's errors by position against the league's per-position average,
+  and calls out the positions most above it as the ones worth testing.
 - `app/pages/9_Data_Admin.py` runs the scraper/recompute pipeline as a subprocess from the
   UI and shows recent `ScrapeLog` activity. Only reachable at all when `is_deployed()` is
   False (see above); its own live-refresh controls are additionally gated the same way.
@@ -278,7 +309,9 @@ writes back upstream.
   league-season (`stats/league_context.py`), plus the fixed-geometry pull-tendency/spray-chart
   approximation, the first-pitch-strike% count-diffing method, the matchup table's
   no-minimum-sample-size caveat, the empirical-Bayes shrinkage formula (`stats/shrinkage.py`),
-  the batter-archetype clustering feature set/exclusions (`stats/archetypes.py`), and the
+  the batter-archetype clustering feature set/exclusions (`stats/archetypes.py`), the
+  errors-by-position attribution rule and its "errors are not a fielding-quality metric"
+  warning (`scraper/scrape_boxscores.py`, `docs/fielding_metrics_plan.md`), and the
   scouting report's probable-pitcher inference and lineup-optimizer model
   (`stats/probable_pitchers.py`, `stats/lineup.py`) — keep it in sync if any of those
   modules' approach changes.

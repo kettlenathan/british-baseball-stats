@@ -29,6 +29,7 @@ _FORMATTED_COLS = {
     "team_ip_share": "percent", "score_share": "percent", "target_woba": "%.3f",
     "vs_hand_woba": "%.3f", "onbase": "%.3f", "power": "%.3f", "expected_runs": "%.2f",
     "avg_vs_lhp": "%.3f", "avg_vs_rhp": "%.3f",
+    "e_per_team": "%.1f", "e_vs_league": "%+.1f",
 }
 
 
@@ -106,3 +107,7 @@ ROSTER_COLUMN_CONFIG = _build(["player", "position", "jersey_number"])
 MATCHUP_COLUMN_CONFIG = _build(["opponent", "pa", "ab", "h", "doubles", "triples", "hr", "bb", "so", "hbp", "avg"])
 
 RECENT_GAMES_COLUMN_CONFIG = _build(["game_date", "opponent", "home_away", "score", "result"])
+
+FIELDING_COLUMN_CONFIG = _build(
+    ["position", "player", "g", "po", "a", "e", "dp", "fpct", "e_per_team", "e_vs_league"]
+)

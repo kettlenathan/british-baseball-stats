@@ -32,19 +32,55 @@ never usable (`ball`/`called`/`swing`/`foul`/`inplay`, and the true
 instead derived by diffing the `balls`/`strikes` count between pitches (see
 `_first_pitch_strike`), and batted-ball location is approximated from
 `hitpull`/`hitdistance`/`hittype` instead of true coordinates.
+
+Each play's free-text `narrative` is the one place the fielder's *position*
+on an error is recorded (standard scorer notation: "E6", "E4T"), since the
+`errortype` field is another dead always-zero one and no play record names
+the fielder. That notation is what lets `_extract_fielding_lines` break a
+player-game's fielding totals down by position (db.models.FieldingGameLine).
 """
 
+import re
+from collections import Counter
 from typing import Any
 
 from sqlalchemy.orm import Session
 
 from config import BASE_URL
-from db.models import BattingGameLine, Game, PitchingGameLine, PlateAppearance, Player, PlayerSeason, TeamSeason
+from db.models import (
+    BattingGameLine,
+    FieldingGameLine,
+    Game,
+    PitchingGameLine,
+    PlateAppearance,
+    Player,
+    PlayerSeason,
+    TeamSeason,
+)
 from db.upsert import upsert
 from scraper.discovery import resolve_fetch_code
 from scraper.http_client import fetch_inertia
 
 _NON_TEAM_KEYS = {"totals", "pitchers"}
+
+# Standard scorer's position numbering, as it appears in the play-by-play
+# narrative's error notation (see _extract_narrative_errors).
+_POSITION_BY_NUMBER = {
+    "1": "P", "2": "C", "3": "1B", "4": "2B", "5": "3B",
+    "6": "SS", "7": "LF", "8": "CF", "9": "RF",
+}
+
+# "E6" (fielding error by the shortstop), "E4T" (throwing error by the second
+# baseman), "E7" (dropped fly by the left fielder). Requiring a digit right
+# after the E is what keeps surnames out — this league has plenty of players
+# called EVANS and ELLIS, and none of them match.
+_ERROR_TOKEN = re.compile(r"\bE([1-9])[A-Z]*\b")
+
+# Positions a fielding line can be filed under. Anything the box score names
+# that isn't a real defensive position (DH/PH/PR, or a blank `pos`) can still
+# carry fielding counts in this data, so they're kept rather than dropped;
+# UNKNOWN_POSITION is the residue neither source could place.
+UNKNOWN_POSITION = "UNK"
 
 _BATTING_SUM_FIELDS = {
     "pa": "pa",
@@ -257,6 +293,156 @@ def _extract_plate_appearances(
     return rows
 
 
+def _extract_narrative_errors(
+    game_plays: dict[str, Any],
+    home_source_team_id: int | None,
+    away_source_team_id: int | None,
+) -> dict[int, Counter]:
+    """Returns {source_team_id: Counter({position: errors})}, read off the
+    play-by-play narrative's scorer notation ("... reaches on fielding error.
+    E6.").
+
+    Which team was fielding is structural rather than read off a flag: the
+    top of an inning is always the away team batting, so the home team is
+    fielding — the same rule _extract_lob relies on.
+
+    This is deliberately *not* used as the source of error counts: narrative
+    tokens miss errors on stolen-base throws and runner advancement, and
+    disagree with the box score's own totals in roughly half of team-games
+    (see docs/fielding_metrics_plan.md). It is only ever used to decide
+    *which position* an already-counted error belongs to.
+    """
+    errors: dict[int, Counter] = {}
+    if not isinstance(game_plays, dict):
+        return errors
+    seen_play_ids: set[Any] = set()
+    for halves in game_plays.values():
+        if not isinstance(halves, dict):
+            continue
+        for half_name, plays in halves.items():
+            if not isinstance(plays, list):
+                continue
+            fielding_team = home_source_team_id if half_name == "top" else away_source_team_id
+            if fielding_team is None:
+                continue
+            for play in plays:
+                play_id = play.get("id")
+                if play_id is not None:
+                    if play_id in seen_play_ids:
+                        continue
+                    seen_play_ids.add(play_id)
+                for number in _ERROR_TOKEN.findall(play.get("narrative") or ""):
+                    errors.setdefault(fielding_team, Counter())[_POSITION_BY_NUMBER[number]] += 1
+    return errors
+
+
+def _extract_fielding_lines(
+    by_player: dict[int, list[dict[str, Any]]],
+    ps_id_by_player: dict[int, int],
+    team_season_id_by_player: dict[int, int],
+    narrative_errors: dict[int, Counter],
+    game_id: int,
+) -> list[dict[str, Any]]:
+    """Break each player-game's fielding totals down by position, one row per
+    (player, position) — see db/models.py:FieldingGameLine.
+
+    The box score's `pos` is a slash-joined path of the positions a player
+    occupied during one stint ("SS/P", "2B/P/P"), while that record's fielding
+    counts are a single total, so a multi-position record's errors belong to
+    no one position on the record's own evidence. Those are split using the
+    game's narrative E<n> tokens for the same fielding team, restricted to the
+    positions that record actually names; PO/A/DP go to the first position
+    named (where the stint started), which is the one approximation here.
+    Errors the narrative can't place are filed under UNKNOWN_POSITION rather
+    than guessed at.
+
+    Summing the returned rows per player reproduces that player's box-score
+    fielding totals exactly, so the app never shows a per-position breakdown
+    that contradicts the team/player totals the site itself publishes.
+    """
+    # Narrative tokens are consumed as they are used, so two players who each
+    # spent part of a game at the same position can't both claim the same
+    # error. Single-position records are settled first — their attribution is
+    # already exact, and retiring their tokens up front stops an ambiguous
+    # record from drawing on an error that demonstrably belongs elsewhere.
+    remaining = {team: counter.copy() for team, counter in narrative_errors.items()}
+    rows: dict[tuple[int, str], dict[str, Any]] = {}
+    ambiguous: list[tuple[int, int, Any, list[str], int]] = []
+
+    def row_for(ps_id: int, team_season_id: int, position: str) -> dict[str, Any]:
+        key = (ps_id, position)
+        if key not in rows:
+            rows[key] = {
+                "game_id": game_id,
+                "player_season_id": ps_id,
+                "team_season_id": team_season_id,
+                "position": position,
+                "appearances": 0,
+                "po": 0,
+                "a": 0,
+                "e": 0,
+                "dp": 0,
+            }
+        return rows[key]
+
+    for source_player_id, records in by_player.items():
+        ps_id = ps_id_by_player.get(source_player_id)
+        team_season_id = team_season_id_by_player.get(source_player_id)
+        if ps_id is None or team_season_id is None:
+            continue
+        source_team_id = records[-1].get("teamid")
+
+        for rec in records:
+            po = int(rec.get("field_po") or 0)
+            assists = int(rec.get("field_a") or 0)
+            errors = int(rec.get("field_e") or 0)
+            dp = int(rec.get("field_dp") or 0)
+            # dict.fromkeys rather than set(): "P/SS/P" is one stint back at
+            # the same position, and the *order* is what identifies where it
+            # started, so this has to stay order-preserving.
+            positions = list(dict.fromkeys(p for p in (rec.get("pos") or "").split("/") if p))
+            if not positions and not (po or assists or errors or dp):
+                continue
+
+            if len(positions) <= 1:
+                position = positions[0] if positions else UNKNOWN_POSITION
+                row = row_for(ps_id, team_season_id, position)
+                row["appearances"] += 1
+                row["po"] += po
+                row["a"] += assists
+                row["e"] += errors
+                row["dp"] += dp
+                counter = remaining.get(source_team_id)
+                if errors and counter is not None:
+                    counter[position] -= min(errors, counter[position])
+                continue
+
+            first = row_for(ps_id, team_season_id, positions[0])
+            first["po"] += po
+            first["a"] += assists
+            first["dp"] += dp
+            for position in positions:
+                row_for(ps_id, team_season_id, position)["appearances"] += 1
+            if errors:
+                ambiguous.append((ps_id, team_season_id, source_team_id, positions, errors))
+
+    for ps_id, team_season_id, source_team_id, positions, errors in ambiguous:
+        counter = remaining.get(source_team_id)
+        for position in positions:
+            if errors <= 0:
+                break
+            available = counter[position] if counter is not None else 0
+            take = min(errors, available)
+            if take:
+                counter[position] -= take
+                row_for(ps_id, team_season_id, position)["e"] += take
+                errors -= take
+        if errors:
+            row_for(ps_id, team_season_id, UNKNOWN_POSITION)["e"] += errors
+
+    return list(rows.values())
+
+
 def scrape_boxscore(
     league_code: str,
     year: int,
@@ -351,6 +537,26 @@ def scrape_boxscore(
     home_lob, away_lob = _extract_lob(game_plays)
     game.home_lob = home_lob
     game.away_lob = away_lob
+
+    source_team_id_by_team_season = {ts_id: src for src, ts_id in team_season_by_source_id.items()}
+    narrative_errors = _extract_narrative_errors(
+        game_plays,
+        source_team_id_by_team_season.get(game.home_team_season_id),
+        source_team_id_by_team_season.get(game.away_team_season_id),
+    )
+    # Cleared and rebuilt rather than upserted: which (player, position) rows
+    # a game produces depends on the attribution rule above, so a re-run after
+    # that rule changes would otherwise strand rows it no longer generates
+    # (e.g. an "UNK" row left behind once the narrative can place that error).
+    session.query(FieldingGameLine).filter_by(game_id=game.id).delete(synchronize_session=False)
+    for fielding_row in _extract_fielding_lines(
+        by_player,
+        player_season_id_by_player,
+        team_season_id_by_player,
+        narrative_errors,
+        game.id,
+    ):
+        upsert(session, FieldingGameLine, fielding_row, ["game_id", "player_season_id", "position"])
 
     for pa_row in _extract_plate_appearances(game_plays, player_season_id_by_player, game.id):
         upsert(session, PlateAppearance, pa_row, ["source_play_id"])
