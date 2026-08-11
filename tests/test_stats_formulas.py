@@ -4,7 +4,14 @@ import pytest
 
 from stats.advanced_stats import era_plus, fip, wrc_plus
 from stats.advanced_stats import woba as advanced_woba
-from stats.rate_stats import batting_rate_stats, hit_type_mix, outs_to_ip, outs_to_ip_display, pitching_rate_stats
+from stats.rate_stats import (
+    batting_rate_stats,
+    caught_stealing_pct,
+    hit_type_mix,
+    outs_to_ip,
+    outs_to_ip_display,
+    pitching_rate_stats,
+)
 
 
 def make_batter(**overrides):
@@ -112,3 +119,17 @@ def test_era_plus():
     assert era_plus(player_era=4.5, lg_era=4.5) == pytest.approx(100.0)
     assert era_plus(player_era=None, lg_era=4.5) is None
     assert era_plus(player_era=0, lg_era=4.5) is None
+
+
+def test_caught_stealing_pct_denominator_includes_the_runners_caught():
+    """The source's `sba` is steals *allowed* and excludes runners thrown out,
+    so attempts are sba + csb. Dividing by sba alone would report a catcher
+    who caught 2 of 12 attempts as 20%, not 17%."""
+    assert caught_stealing_pct(csb=2, sba=10) == pytest.approx(2 / 12)
+    assert caught_stealing_pct(csb=0, sba=40) == pytest.approx(0.0)
+    assert caught_stealing_pct(csb=5, sba=0) == pytest.approx(1.0)
+
+
+def test_caught_stealing_pct_is_none_when_nobody_ran():
+    # Not 0.0 — never being tested is not the same as never throwing anyone out.
+    assert caught_stealing_pct(csb=0, sba=0) is None

@@ -43,6 +43,18 @@ def fielding_pct(po: int, a: int, e: int) -> float | None:
     return (po + a) / denom if denom else None
 
 
+def caught_stealing_pct(csb: int, sba: int) -> float | None:
+    """Share of stolen-base attempts a catcher threw out.
+
+    `sba` is stolen bases *allowed* and excludes runners caught, so the
+    denominator is sba + csb rather than sba alone — see
+    db/models.py:FieldingGameLine and docs/fielding_metrics_plan.md for the
+    check against the opposing team's own SB/CS totals.
+    """
+    attempts = sba + csb
+    return csb / attempts if attempts else None
+
+
 def avg_risp(risp_h: int, risp_ab: int) -> float | None:
     return risp_h / risp_ab if risp_ab else None
 

@@ -389,6 +389,7 @@ def _hitters_section(data: dict) -> list:
 
 _DEFENSE_TABLE_COLS = ["position", "g", "po", "a", "e", "dp", "fpct", "e_per_team", "e_vs_league"]
 _DEFENSE_ERROR_PLAYER_COLS = ["position", "player", "g", "po", "a", "e", "fpct"]
+_CATCHER_TABLE_COLS = ["player", "g", "sb_against", "cs", "sb_att", "cs_pct", "pb"]
 
 
 def _defense_section(data: dict) -> list:
@@ -435,6 +436,37 @@ def _defense_section(data: dict) -> list:
                 ]
             )
         )
+
+    catchers = data.get("catchers")
+    if catchers is not None and not catchers.empty:
+        block = [
+            Paragraph("Can we run on them?", _H3),
+            _df_table(catchers, [c for c in _CATCHER_TABLE_COLS if c in catchers.columns]),
+        ]
+        primary = catchers.iloc[0]
+        league_cs_pct = data.get("league_catcher_cs_pct")
+        if primary.get("cs_pct") is not None and league_cs_pct is not None:
+            verdict = "Run at will" if primary["cs_pct"] < league_cs_pct else "Be selective"
+            block.append(Spacer(1, 2 * mm))
+            block.append(
+                Paragraph(
+                    f"<b>{verdict}:</b> their main catcher {primary['player']} has thrown out "
+                    f"{primary['cs_pct']:.1%} of runners ({int(primary['cs'])} of "
+                    f"{int(primary['sb_att'])} attempts), against a league average of "
+                    f"{league_cs_pct:.1%}.",
+                    _BODY,
+                )
+            )
+        block.append(
+            Paragraph(
+                "Attempts are steals allowed plus runners caught. This league's scorers charge part "
+                "of a team's steals allowed to the pitcher, so these are the catcher's own share — "
+                "and a slow-working pitcher inflates their steals against.",
+                _SMALL,
+            )
+        )
+        story.append(Spacer(1, 3 * mm))
+        story.append(KeepTogether(block))
     return story
 
 
@@ -576,7 +608,7 @@ def _page_footer(canvas, doc):
 def build_scouting_pdf(data: dict) -> bytes:
     """Assemble the full report. `data` keys (all optional except our_team /
     opponent / league_label): fixture, freshness, standings, team_stats,
-    recent_games, hitters, hitter_details, defense, defense_error_players,
+    recent_games, hitters, hitter_details, defense, defense_error_players, catchers,
     staff, pitcher_details, lineup — see the section builders above for each
     shape."""
     buffer = io.BytesIO()

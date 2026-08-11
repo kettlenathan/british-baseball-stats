@@ -352,9 +352,10 @@ def _extract_fielding_lines(
     no one position on the record's own evidence. Those are split using the
     game's narrative E<n> tokens for the same fielding team, restricted to the
     positions that record actually names; PO/A/DP go to the first position
-    named (where the stint started), which is the one approximation here.
-    Errors the narrative can't place are filed under UNKNOWN_POSITION rather
-    than guessed at.
+    named (where the stint started), which is the one approximation here, and
+    the battery stats (steals against, passed balls) go to C or P wherever
+    they appear in the path. Errors the narrative can't place are filed under
+    UNKNOWN_POSITION rather than guessed at.
 
     Summing the returned rows per player reproduces that player's box-score
     fielding totals exactly, so the app never shows a per-position breakdown
@@ -382,6 +383,9 @@ def _extract_fielding_lines(
                 "a": 0,
                 "e": 0,
                 "dp": 0,
+                "sba": 0,
+                "csb": 0,
+                "pb": 0,
             }
         return rows[key]
 
@@ -397,11 +401,14 @@ def _extract_fielding_lines(
             assists = int(rec.get("field_a") or 0)
             errors = int(rec.get("field_e") or 0)
             dp = int(rec.get("field_dp") or 0)
+            sba = int(rec.get("field_sba") or 0)
+            csb = int(rec.get("field_csb") or 0)
+            pb = int(rec.get("field_pb") or 0)
             # dict.fromkeys rather than set(): "P/SS/P" is one stint back at
             # the same position, and the *order* is what identifies where it
             # started, so this has to stay order-preserving.
             positions = list(dict.fromkeys(p for p in (rec.get("pos") or "").split("/") if p))
-            if not positions and not (po or assists or errors or dp):
+            if not positions and not (po or assists or errors or dp or sba or csb or pb):
                 continue
 
             if len(positions) <= 1:
@@ -412,6 +419,9 @@ def _extract_fielding_lines(
                 row["a"] += assists
                 row["e"] += errors
                 row["dp"] += dp
+                row["sba"] += sba
+                row["csb"] += csb
+                row["pb"] += pb
                 counter = remaining.get(source_team_id)
                 if errors and counter is not None:
                     counter[position] -= min(errors, counter[position])
@@ -421,6 +431,15 @@ def _extract_fielding_lines(
             first["po"] += po
             first["a"] += assists
             first["dp"] += dp
+            # Steals against and passed balls are battery stats: they can only
+            # have happened during the catching (or pitching) part of a stint,
+            # so they follow the position rather than the stint's start — a
+            # "3B/C" record's steals belong to C, not to third base.
+            battery_position = next((p for p in ("C", "P") if p in positions), positions[0])
+            battery = row_for(ps_id, team_season_id, battery_position)
+            battery["sba"] += sba
+            battery["csb"] += csb
+            battery["pb"] += pb
             for position in positions:
                 row_for(ps_id, team_season_id, position)["appearances"] += 1
             if errors:

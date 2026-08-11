@@ -26,8 +26,11 @@ from scraper.scrape_boxscores import (
 from stats.aggregation import aggregate_fielding
 
 
-def _record(pos, *, po=0, a=0, e=0, dp=0, teamid=500):
-    return {"pos": pos, "field_po": po, "field_a": a, "field_e": e, "field_dp": dp, "teamid": teamid}
+def _record(pos, *, po=0, a=0, e=0, dp=0, sba=0, csb=0, pb=0, teamid=500):
+    return {
+        "pos": pos, "field_po": po, "field_a": a, "field_e": e, "field_dp": dp,
+        "field_sba": sba, "field_csb": csb, "field_pb": pb, "teamid": teamid,
+    }
 
 
 def _rows_by_position(rows):
@@ -203,6 +206,54 @@ def test_totals_are_preserved_across_every_kind_of_record():
             assert sum(r[field] for r in rows if r["player_season_id"] == ps_id) == sum(
                 rec[source] for rec in records
             ), f"{field} not preserved for player_season {ps_id}"
+
+
+def test_battery_stats_follow_the_catcher_not_the_start_of_the_stint():
+    """A player who moved from third base to catcher can only have conceded
+    steals while catching — attributing them to 3B (where the stint started,
+    which is where PO/A/DP go) would invent a third baseman with a caught
+    stealing."""
+    by_player = {1: [_record("3B/C", po=2, a=1, sba=4, csb=1, pb=2)]}
+
+    rows = _rows_by_position(_extract_fielding_lines(by_player, {1: 100}, {1: 900}, {}, game_id=1))
+
+    assert (rows["C"]["sba"], rows["C"]["csb"], rows["C"]["pb"]) == (4, 1, 2)
+    assert (rows["3B"]["sba"], rows["3B"]["csb"], rows["3B"]["pb"]) == (0, 0, 0)
+    # PO/A still follow the "first position named" rule.
+    assert (rows["3B"]["po"], rows["3B"]["a"]) == (2, 1)
+
+
+def test_battery_stats_fall_back_to_the_pitcher_when_no_catcher_in_the_path():
+    # This league's scorers charge part of a team's steals allowed to the
+    # pitcher, so a P/LF record's steals belong to the pitching half.
+    by_player = {1: [_record("LF/P", sba=3)]}
+
+    rows = _rows_by_position(_extract_fielding_lines(by_player, {1: 100}, {1: 900}, {}, game_id=1))
+
+    assert rows["P"]["sba"] == 3
+    assert rows["LF"]["sba"] == 0
+
+
+def test_battery_totals_are_preserved_like_every_other_fielding_total():
+    by_player = {
+        1: [_record("C", sba=5, csb=2, pb=1), _record("C/1B", sba=3, csb=1)],
+        2: [_record("P", sba=2)],
+    }
+
+    rows = _extract_fielding_lines(by_player, {1: 100, 2: 200}, {1: 900, 2: 900}, {}, 1)
+
+    for ps_id, records in ((100, by_player[1]), (200, by_player[2])):
+        for field, source in (("sba", "field_sba"), ("csb", "field_csb"), ("pb", "field_pb")):
+            assert sum(r[field] for r in rows if r["player_season_id"] == ps_id) == sum(
+                rec[source] for rec in records
+            ), f"{field} not preserved for player_season {ps_id}"
+
+
+def test_record_with_only_battery_stats_still_produces_a_row():
+    # A catcher who conceded steals but recorded no putout/assist/error must
+    # not be dropped by the "nothing happened" skip.
+    rows = _extract_fielding_lines({1: [_record("", sba=2)]}, {1: 100}, {1: 900}, {}, 1)
+    assert len(rows) == 1 and rows[0]["sba"] == 2
 
 
 def test_record_with_no_position_and_no_activity_produces_no_row():

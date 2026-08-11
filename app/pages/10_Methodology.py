@@ -246,6 +246,22 @@ st.markdown(
     "totals in about half of team-games. It's reliable for *which position* an error belongs to "
     "and unreliable for *how many* there were, so it's used only for the former."
 )
+st.markdown(
+    "**Catcher throwing**: the box score records stolen bases allowed and runners caught "
+    "against each fielder. Stolen bases allowed **exclude** runners thrown out, so the attempts "
+    "column is *allowed + caught*, and CS% is caught ÷ attempts. This was checked against the "
+    "opposing team's own SB/CS totals for the same game, which the fielding numbers reproduce in "
+    "96–99% of team-games."
+)
+st.markdown(
+    "Two caveats worth knowing before reading a catcher's CS%. This league's scorers charge part "
+    "of a team's steals allowed to the **pitcher** rather than the catcher, so a catcher's line "
+    "is their own share and not every steal the team conceded. And CS% is as much a property of "
+    "the pitching staff — how quickly they get to the plate, whether they hold runners — as of "
+    "the catcher's arm. League-wide, catchers here throw out only a low single-digit percentage "
+    "of runners, so compare against the league figure shown alongside rather than against "
+    "professional norms."
+)
 st.warning(
     "**Errors are not a fielding-quality metric.** They have no opportunity denominator here — "
     "there are no innings-by-position, no batted-ball locations relative to where a fielder was "

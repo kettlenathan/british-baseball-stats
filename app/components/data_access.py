@@ -52,6 +52,7 @@ from stats.rate_stats import (
     avg,
     avg_risp,
     batting_rate_stats,
+    caught_stealing_pct,
     fielding_pct,
     fps_pct,
     hit_type_mix,
@@ -731,6 +732,124 @@ def player_fielding_by_position(full_name: str, league_season_id: int | None = N
         if df.empty:
             return df
         return df.sort_values(["e", "g"], ascending=False).reset_index(drop=True)
+    finally:
+        session.close()
+
+
+_CATCHER_THROWING_COLS = ["sb_against", "cs", "sb_att", "cs_pct", "pb"]
+
+
+def _catcher_frame(rows: list[dict]) -> pd.DataFrame:
+    """Shared shaping for the catcher throwing views: attempts and CS% from
+    the raw allowed/caught counts, biggest workload first."""
+    df = pd.DataFrame(rows)
+    if df.empty:
+        return df
+    df["sb_att"] = df["sb_against"] + df["cs"]
+    df["cs_pct"] = [caught_stealing_pct(r.cs, r.sb_against) for r in df.itertuples()]
+    df = df[df["sb_att"] > 0]
+    if df.empty:
+        return df
+    return df.sort_values("sb_att", ascending=False).reset_index(drop=True)
+
+
+@st.cache_data
+def team_catcher_throwing(league_season_id: int, team_name: str) -> pd.DataFrame:
+    """One row per catcher: stolen bases allowed, runners caught, attempts and
+    CS%.
+
+    Only the C rows are counted. This league's scorers charge part of a team's
+    steals allowed to the *pitcher* (see FieldingGameLine.sba), so a catcher's
+    totals here are deliberately their own share and will read lower than the
+    team's total steals allowed.
+    """
+    session = get_session()
+    try:
+        ts_id = _team_season_id(session, league_season_id, team_name)
+        if ts_id is None:
+            return pd.DataFrame()
+        rows = session.execute(
+            select(
+                Player.full_name,
+                func.sum(FieldingSeasonStats.games).label("g"),
+                func.sum(FieldingSeasonStats.sba).label("sb_against"),
+                func.sum(FieldingSeasonStats.csb).label("cs"),
+                func.sum(FieldingSeasonStats.pb).label("pb"),
+            )
+            .join(PlayerSeason, PlayerSeason.id == FieldingSeasonStats.player_season_id)
+            .join(Player, Player.id == PlayerSeason.player_id)
+            .where(PlayerSeason.team_season_id == ts_id, FieldingSeasonStats.position == "C")
+            .group_by(Player.full_name)
+        ).all()
+        return _catcher_frame(
+            [
+                {
+                    "player": r.full_name, "g": r.g or 0, "sb_against": r.sb_against or 0,
+                    "cs": r.cs or 0, "pb": r.pb or 0,
+                }
+                for r in rows
+            ]
+        )
+    finally:
+        session.close()
+
+
+@st.cache_data
+def player_catcher_throwing(full_name: str, league_season_id: int | None = None) -> pd.DataFrame:
+    """One catcher's throwing line, per season or summed across their career
+    when `league_season_id` is None — same scoping as the Player Page's other
+    sections."""
+    session = get_session()
+    try:
+        query = (
+            select(
+                func.sum(FieldingSeasonStats.games).label("g"),
+                func.sum(FieldingSeasonStats.sba).label("sb_against"),
+                func.sum(FieldingSeasonStats.csb).label("cs"),
+                func.sum(FieldingSeasonStats.pb).label("pb"),
+            )
+            .join(PlayerSeason, PlayerSeason.id == FieldingSeasonStats.player_season_id)
+            .join(Player, Player.id == PlayerSeason.player_id)
+            .where(Player.full_name == full_name, FieldingSeasonStats.position == "C")
+        )
+        if league_season_id is not None:
+            query = query.join(TeamSeason, TeamSeason.id == PlayerSeason.team_season_id).where(
+                TeamSeason.league_season_id == league_season_id
+            )
+        row = session.execute(query).one()
+        return _catcher_frame(
+            [{"player": full_name, "g": row.g or 0, "sb_against": row.sb_against or 0,
+              "cs": row.cs or 0, "pb": row.pb or 0}]
+        )
+    finally:
+        session.close()
+
+
+@st.cache_data
+def league_catcher_throwing(league_season_id: int) -> dict | None:
+    """League-wide catcher CS% for one league_season — the yardstick a single
+    catcher's rate is read against, since throwing runners out is rare enough
+    here that a raw count says little on its own."""
+    session = get_session()
+    try:
+        row = session.execute(
+            select(
+                func.sum(FieldingSeasonStats.sba),
+                func.sum(FieldingSeasonStats.csb),
+            )
+            .join(PlayerSeason, PlayerSeason.id == FieldingSeasonStats.player_season_id)
+            .join(TeamSeason, TeamSeason.id == PlayerSeason.team_season_id)
+            .where(TeamSeason.league_season_id == league_season_id, FieldingSeasonStats.position == "C")
+        ).one()
+        sb_against, cs = row[0] or 0, row[1] or 0
+        if sb_against + cs == 0:
+            return None
+        return {
+            "sb_against": sb_against,
+            "cs": cs,
+            "sb_att": sb_against + cs,
+            "cs_pct": caught_stealing_pct(cs, sb_against),
+        }
     finally:
         session.close()
 

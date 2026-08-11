@@ -113,10 +113,20 @@ writes back upstream.
      LeagueSeasonContext, BattingWar, PitchingWar, BatterSpraySeasonStats,
      BatterPitcherMatchup — written only by `stats/`, safe to drop and rebuild at any time
      from fact rows.
-- `FieldingGameLine` is a strict per-position *breakdown* of the fielding totals
-  `BattingGameLine` already stores for the same player-game (which stay as they are): summing
-  its rows reproduces those totals exactly, so a by-position view can never contradict the
-  team/player totals the site itself publishes. `position` is `"UNK"` for the ~1.5% of errors
+- `FieldingGameLine` is a per-position *breakdown* of the fielding totals `BattingGameLine`
+  stores for the same player-game (which stay as they are): summing its rows reproduces those
+  totals exactly for every player who has a batting row, so a by-position view can never
+  contradict the team/player totals the site itself publishes. It is a **superset**, though,
+  not a mirror — `BattingGameLine` is only written when a player actually batted (`pa`/`ab` >
+  0), so defensive substitutes who never hit have no batting row, and their fielding is
+  recorded only here (5,088 player-games, 414 errors, across the scraped corpus). Expect the
+  two tables' league-wide fielding totals to differ by exactly that residue; they do. Its `sba`/`csb`/`pb` (catcher throwing) carry
+  one trap: **`sba` is stolen bases *allowed* and excludes runners thrown out**, so attempts
+  against a catcher are `sba + csb` — `stats/rate_stats.py:caught_stealing_pct` is the one
+  place that division lives. Steals allowed are also split between the catcher *and* the
+  pitcher by this league's scorers, so a catcher's line is their own share rather than every
+  steal the team conceded; both facts are stated in the UI captions and Methodology page, and
+  the league CS rate really is ~2%, not a parsing bug. `position` is `"UNK"` for the ~1.5% of errors
   neither source could place — surfaced in the UI rather than dropped, precisely so the
   positions keep adding up. Unlike the other ingestion writes it is delete-then-insert per
   game rather than a pure upsert, since which `(player, position)` rows a game produces
@@ -265,7 +275,8 @@ writes back upstream.
   games (`data_access.team_recent_games` — "weekends" relative to that team's own most recent
   game in the selected league_season, not real wall-clock today, since historical seasons
   have no games near today) above the roster, plus errors by position
-  (`data_access.team_fielding_by_position` / `team_position_error_players`).
+  (`data_access.team_fielding_by_position` / `team_position_error_players`) and catcher
+  throwing (`team_catcher_throwing`, against `league_catcher_throwing`).
 - Every errors-by-position view pairs the team's raw count with
   `data_access.league_fielding_by_position`'s per-team average **at the same position**, and
   the pages say so in a caption: shortstops and third basemen out-error corner outfielders on
@@ -300,7 +311,9 @@ writes back upstream.
   `formatting.py:column_config_for(df)` exists for this page's tables (derive config from
   whatever columns are present rather than a fixed list). A "their defence" section (page +
   PDF) shows the opponent's errors by position against the league's per-position average,
-  and calls out the positions most above it as the ones worth testing.
+  and calls out the positions most above it as the ones worth testing; a "can we run on
+  them?" block does the same for the opponent's catchers, comparing their CS% to the league
+  average to give a run/hold verdict.
 - `app/pages/9_Data_Admin.py` runs the scraper/recompute pipeline as a subprocess from the
   UI and shows recent `ScrapeLog` activity. Only reachable at all when `is_deployed()` is
   False (see above); its own live-refresh controls are additionally gated the same way.
@@ -311,7 +324,8 @@ writes back upstream.
   no-minimum-sample-size caveat, the empirical-Bayes shrinkage formula (`stats/shrinkage.py`),
   the batter-archetype clustering feature set/exclusions (`stats/archetypes.py`), the
   errors-by-position attribution rule and its "errors are not a fielding-quality metric"
-  warning (`scraper/scrape_boxscores.py`, `docs/fielding_metrics_plan.md`), and the
+  warning plus the catcher-throwing attempts definition
+  (`scraper/scrape_boxscores.py`, `docs/fielding_metrics_plan.md`), and the
   scouting report's probable-pitcher inference and lineup-optimizer model
   (`stats/probable_pitchers.py`, `stats/lineup.py`) — keep it in sync if any of those
   modules' approach changes.

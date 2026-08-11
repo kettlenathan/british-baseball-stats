@@ -86,6 +86,15 @@ def _full_data() -> dict:
         "defense_error_players": pd.DataFrame(
             [{"position": "SS", "player": "Butterfingers", "g": 12, "po": 18, "a": 25, "e": 8, "fpct": 0.843}]
         ),
+        "catchers": pd.DataFrame(
+            [
+                {"player": "Noodle ARM", "g": 15, "sb_against": 40, "cs": 2, "sb_att": 42,
+                 "cs_pct": 2 / 42, "pb": 6},
+                {"player": "Backup CATCHER", "g": 4, "sb_against": 5, "cs": 5, "sb_att": 10,
+                 "cs_pct": 0.5, "pb": 1},
+            ]
+        ),
+        "league_catcher_cs_pct": 0.06,
         "staff": staff,
         "pitcher_details": [
             {
@@ -194,10 +203,23 @@ def test_report_builds_without_a_defence_section():
     data = _full_data()
     data["defense"] = pd.DataFrame()
     data["defense_error_players"] = pd.DataFrame()
+    data["catchers"] = pd.DataFrame()
     assert build_scouting_pdf(data)[:5] == b"%PDF-"
 
     data = _full_data()
     data["defense"] = data["defense"].drop(columns=["e_per_team", "e_vs_league"])
+    assert build_scouting_pdf(data)[:5] == b"%PDF-"
+
+
+def test_report_builds_without_a_league_catcher_baseline():
+    # No league-wide CS% to compare against (e.g. a season with no recorded
+    # attempts) must still render the catcher table, just without the verdict.
+    data = _full_data()
+    data["league_catcher_cs_pct"] = None
+    assert build_scouting_pdf(data)[:5] == b"%PDF-"
+
+    data = _full_data()
+    data["catchers"] = data["catchers"].assign(cs_pct=None)
     assert build_scouting_pdf(data)[:5] == b"%PDF-"
 
 

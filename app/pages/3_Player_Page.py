@@ -16,12 +16,14 @@ from app.components.data_access import (
     pitcher_spray_points,
     pitching_true_talent,
     player_batting_career,
+    player_catcher_throwing,
     player_fielding_by_position,
     player_league_seasons,
     player_pitching_career,
 )
 from app.components.formatting import (
     BATTING_COLUMN_CONFIG,
+    CATCHER_THROWING_COLUMN_CONFIG,
     FIELDING_COLUMN_CONFIG,
     MATCHUP_COLUMN_CONFIG,
     PITCHING_COLUMN_CONFIG,
@@ -224,4 +226,19 @@ else:
             f"Most errors at **{worst['position']}** — {int(worst['e'])} in {int(worst['g'])} "
             f"game(s) there. Error counts are raw totals with no chance-opportunity denominator, "
             "so a position they play far more often will tend to top this list."
+        )
+
+    catcher_df = player_catcher_throwing(player, field_scope_id)
+    if not catcher_df.empty:
+        st.markdown("##### Throwing (as catcher)")
+        st.dataframe(
+            catcher_df,
+            hide_index=True,
+            use_container_width=True,
+            column_config=CATCHER_THROWING_COLUMN_CONFIG,
+        )
+        st.caption(
+            "Attempts are steals allowed plus runners caught. This league's scorers charge part of "
+            "a team's steals allowed to the pitcher, so this is the catcher's own share — CS% is as "
+            "much a property of the pitching staff's delivery times as of the catcher's arm."
         )
