@@ -24,6 +24,7 @@ from reportlab.lib import colors  # noqa: E402
 from reportlab.lib.pagesizes import A4  # noqa: E402
 from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet  # noqa: E402
 from reportlab.lib.units import mm  # noqa: E402
+from reportlab.pdfbase.pdfmetrics import stringWidth  # noqa: E402
 from reportlab.platypus import (  # noqa: E402
     Image,
     KeepTogether,
@@ -67,29 +68,147 @@ def _fmt(col: str, value) -> str:
         return str(value)
 
 
-def _df_table(df: pd.DataFrame, cols: list[str], highlight: str | None = None) -> Table:
+# Page geometry, kept next to the margins build_scouting_pdf sets — every
+# table sizes itself against this rather than letting reportlab pick widths
+# from content, which silently runs a 15-column table off the page.
+_PAGE_MARGIN = 15 * mm
+_FRAME_WIDTH = A4[0] - 2 * _PAGE_MARGIN
+
+_TABLE_FONT_SIZE = 7.5
+_HEADER_FONT_SIZE = 7
+_CELL_SIDE_PADDING = 3  # reportlab's default is 6, which alone costs 180pt across 15 columns
+
+# Columns holding prose rather than a number: these may wrap onto a second
+# line instead of forcing a column wide enough for their longest value.
+_WRAPPING_COLS = {"player", "team", "opponent", "role", "evidence", "venue", "confidence", "tendency"}
+
+# A table narrower than the frame is left compact rather than stretched to
+# the margins: spreading a 5-column standings table across 180mm leaves each
+# number marooned in a sea of whitespace. Wide tables still get compressed to
+# the frame. 1.2 gives a little breathing room over the tightest possible fit.
+_COMFORT_FACTOR = 1.2
+
+_TH_LEFT = ParagraphStyle(
+    "ScoutTHLeft", fontName="Helvetica-Bold", fontSize=_HEADER_FONT_SIZE, leading=_HEADER_FONT_SIZE + 1.5,
+    textColor=colors.white, alignment=0,
+)
+_TH_RIGHT = ParagraphStyle("ScoutTHRight", parent=_TH_LEFT, alignment=2)
+_TD = ParagraphStyle("ScoutTD", fontName="Helvetica", fontSize=_TABLE_FONT_SIZE, leading=_TABLE_FONT_SIZE + 1.5)
+_TD_BOLD = ParagraphStyle("ScoutTDBold", parent=_TD, fontName="Helvetica-Bold")
+
+
+def _column_widths(body: list[list[str]], labels: list[str], cols: list[str], avail: float) -> list[float]:
+    """Size columns to fit within `avail` points, never past it.
+
+    Each column gets a minimum (its widest unbreakable token — a whole number,
+    or the longest single word where wrapping is allowed) and a preferred
+    width (everything on one line). The table targets its preferred width plus
+    a little comfort, capped at `avail`; whatever room that leaves or takes is
+    shared out in proportion to each column's own preferred width, so columns
+    keep their natural relative sizes instead of one text column swallowing
+    all the slack.
+    """
+    pad = 2 * _CELL_SIDE_PADDING
+    minimums, preferred = [], []
+    for index, col in enumerate(cols):
+        values = [row[index] for row in body] or [""]
+        value_full = max(stringWidth(v, "Helvetica", _TABLE_FONT_SIZE) for v in values)
+        if col in _WRAPPING_COLS:
+            value_min = max(
+                (stringWidth(w, "Helvetica", _TABLE_FONT_SIZE) for v in values for w in v.split() or [v]),
+                default=0,
+            )
+        else:
+            value_min = value_full  # never break a number across lines
+
+        label = labels[index]
+        head_full = stringWidth(label, "Helvetica-Bold", _HEADER_FONT_SIZE)
+        head_min = max(
+            (stringWidth(w, "Helvetica-Bold", _HEADER_FONT_SIZE) for w in label.split() or [label]),
+            default=0,
+        )
+        minimums.append(max(value_min, head_min) + pad)
+        preferred.append(max(value_full, head_full) + pad)
+
+    if sum(minimums) > avail:
+        # Pathological (a very long unbreakable token) — scale down so the
+        # table still ends at the margin rather than bleeding off the page.
+        scale = avail / sum(minimums)
+        return [w * scale for w in minimums]
+
+    target = min(avail, sum(preferred) * _COMFORT_FACTOR)
+    if target >= sum(preferred):
+        surplus = target - sum(preferred)
+        total = sum(preferred) or 1
+        return [p + surplus * (p / total) for p in preferred]
+
+    # Too wide for the page: take the overflow back out of each column in
+    # proportion to how much it has to give above its own minimum, so the
+    # roomiest columns give up the most and nothing is squeezed below the
+    # width its content actually needs.
+    widths = list(minimums)
+    want = [p - m for p, m in zip(preferred, minimums)]
+    if sum(want) > 0:
+        room = target - sum(minimums)
+        widths = [w + room * (n / sum(want)) for w, n in zip(widths, want)]
+    return widths
+
+
+def _df_table(
+    df: pd.DataFrame, cols: list[str], highlight: str | None = None, avail: float = _FRAME_WIDTH
+) -> Table:
     """A compact reportlab table from DataFrame columns, headers via
     theme.stat_label and numbers via theme.stat_format — the same display
-    conventions as the app's own tables."""
-    header = [stat_label(c) for c in cols]
-    rows = [[_fmt(c, row[c]) if c in row else "—" for c in cols] for _, row in df.iterrows()]
-    table = Table([header] + rows, repeatRows=1)
+    conventions as the app's own tables.
+
+    Column widths are computed to fill exactly `avail` (see _column_widths):
+    left to itself reportlab sizes columns from content and happily draws a
+    wide table straight off the right edge of the page.
+    """
+    labels = [stat_label(c) for c in cols]
+    body = [[_fmt(c, row[c]) if c in row else "—" for c in cols] for _, row in df.iterrows()]
+    widths = _column_widths(body, labels, cols, avail)
+
+    highlighted = {
+        i for i, (_, row) in enumerate(df.iterrows(), start=1)
+        if highlight is not None and highlight in (row.get("player"), row.get("team"))
+    }
+    # Headers align with the values under them — left over wrapped text,
+    # right over the right-aligned numbers — rather than centred, which
+    # leaves the label floating away from its own column of figures.
+    header_cells = [
+        Paragraph(label, _TH_LEFT if (col in _WRAPPING_COLS or i == 0) else _TH_RIGHT)
+        for i, (col, label) in enumerate(zip(cols, labels))
+    ]
+    data = [header_cells]
+    for row_index, row in enumerate(body, start=1):
+        rendered = []
+        for col, value in zip(cols, row):
+            if col in _WRAPPING_COLS:
+                rendered.append(Paragraph(value, _TD_BOLD if row_index in highlighted else _TD))
+            else:
+                rendered.append(value)
+        data.append(rendered)
+
+    table = Table(data, colWidths=widths, repeatRows=1)
+    # reportlab centres a table narrower than the frame; left-align it so
+    # every table starts on the same margin as the headings and body text.
+    table.hAlign = "LEFT"
     style = [
         ("BACKGROUND", (0, 0), (-1, 0), _HEADER_BG),
-        ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
-        ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
-        ("FONTSIZE", (0, 0), (-1, -1), 7.5),
+        ("FONTSIZE", (0, 1), (-1, -1), _TABLE_FONT_SIZE),
         ("ALIGN", (1, 1), (-1, -1), "RIGHT"),
-        ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+        ("VALIGN", (0, 0), (-1, 0), "MIDDLE"),
+        ("VALIGN", (0, 1), (-1, -1), "TOP"),
         ("TOPPADDING", (0, 0), (-1, -1), 2),
         ("BOTTOMPADDING", (0, 0), (-1, -1), 2),
+        ("LEFTPADDING", (0, 0), (-1, -1), _CELL_SIDE_PADDING),
+        ("RIGHTPADDING", (0, 0), (-1, -1), _CELL_SIDE_PADDING),
         ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, _LIGHT_ROW]),
         ("LINEBELOW", (0, 0), (-1, 0), 0.5, colors.grey),
     ]
-    if highlight is not None:
-        for i, (_, row) in enumerate(df.iterrows(), start=1):
-            if highlight in (row.get("player"), row.get("team")):
-                style.append(("FONTNAME", (0, i), (-1, i), "Helvetica-Bold"))
+    for i in highlighted:
+        style.append(("FONTNAME", (0, i), (-1, i), "Helvetica-Bold"))
     table.setStyle(TableStyle(style))
     return table
 
@@ -188,13 +307,28 @@ def _overview_section(data: dict) -> list:
         story.append(Spacer(1, 3 * mm))
     team_stats = data.get("team_stats")
     if team_stats is not None and not team_stats.empty:
-        story.append(Paragraph("Team batting/pitching vs league", _H3))
-        story.append(_df_table(team_stats, [c for c in _OVERVIEW_TEAM_COLS if c in team_stats.columns]))
+        # Sub-heading and its (short) table travel as one unit, so a page
+        # break can't leave a heading stranded at the foot of a page or
+        # orphan a row or two of a table that comfortably fits whole.
+        story.append(
+            KeepTogether(
+                [
+                    Paragraph("Team batting/pitching vs league", _H3),
+                    _df_table(team_stats, [c for c in _OVERVIEW_TEAM_COLS if c in team_stats.columns]),
+                ]
+            )
+        )
         story.append(Spacer(1, 3 * mm))
     recent = data.get("recent_games")
     if recent is not None and not recent.empty:
-        story.append(Paragraph("Recent games (last 3 weekends)", _H3))
-        story.append(_df_table(recent, [c for c in _RECENT_COLS if c in recent.columns]))
+        story.append(
+            KeepTogether(
+                [
+                    Paragraph("Recent games (last 3 weekends)", _H3),
+                    _df_table(recent, [c for c in _RECENT_COLS if c in recent.columns]),
+                ]
+            )
+        )
     story.append(Spacer(1, 4 * mm))
     return story
 
@@ -225,15 +359,28 @@ def _hitters_section(data: dict) -> list:
         block = [Paragraph(detail["name"], _H3)]
         if detail.get("note"):
             block.append(Paragraph(detail["note"], _BODY))
+        # Half the frame each, images centred in their cell — the PNG is
+        # rendered at 3in/150dpi, so it's left at 62mm rather than stretched
+        # to fill the column, which would upscale it and go soft.
         charts = Table(
             [
                 [
                     _spray_image(detail["season_points"], "This season"),
                     _spray_image(detail["career_points"], "Career"),
                 ]
-            ]
+            ],
+            colWidths=[_FRAME_WIDTH / 2] * 2,
         )
-        charts.setStyle(TableStyle([("VALIGN", (0, 0), (-1, -1), "TOP")]))
+        charts.setStyle(
+            TableStyle(
+                [
+                    ("VALIGN", (0, 0), (-1, -1), "TOP"),
+                    ("ALIGN", (0, 0), (-1, -1), "CENTER"),
+                    ("LEFTPADDING", (0, 0), (-1, -1), 0),
+                    ("RIGHTPADDING", (0, 0), (-1, -1), 0),
+                ]
+            )
+        )
         block.append(charts)
         story.append(KeepTogether(block))
         story.append(Spacer(1, 3 * mm))
@@ -245,22 +392,24 @@ _DEFENSE_ERROR_PLAYER_COLS = ["position", "player", "g", "po", "a", "e", "fpct"]
 
 
 def _defense_section(data: dict) -> list:
-    story = [Paragraph("Their defence", _H2)]
     defense = data.get("defense")
     if defense is None or defense.empty:
-        story.append(Paragraph("No fielding data for this team.", _BODY))
-        return story
-    story.append(
+        return [Paragraph("Their defence", _H2), Paragraph("No fielding data for this team.", _BODY)]
+
+    # One position per row means this table is always short enough to sit on a
+    # single page — kept whole with its heading rather than spilling a stray
+    # couple of positions over a page break.
+    block = [
+        Paragraph("Their defence", _H2),
         Paragraph(
             "Errors by position, against the average team's errors at the same position — the only "
             "comparison that means anything, since shortstops and third basemen out-error corner "
             "outfielders everywhere. Fielding % is context, not a verdict: it rewards a fielder who "
             "never reaches the ball in the first place.",
             _SMALL,
-        )
-    )
-    story.append(_df_table(defense, [c for c in _DEFENSE_TABLE_COLS if c in defense.columns]))
-
+        ),
+        _df_table(defense, [c for c in _DEFENSE_TABLE_COLS if c in defense.columns]),
+    ]
     if "e_vs_league" in defense.columns:
         weak = defense[defense["e_vs_league"] > 0].sort_values("e_vs_league", ascending=False)
         if not weak.empty:
@@ -268,17 +417,22 @@ def _defense_section(data: dict) -> list:
                 f"{row.position} ({int(row.e)} E, {row.e_vs_league:+.1f} vs league)"
                 for row in weak.head(3).itertuples()
             )
-            story.append(Spacer(1, 2 * mm))
-            story.append(Paragraph(f"<b>Worth testing:</b> {spots}.", _BODY))
+            block.append(Spacer(1, 2 * mm))
+            block.append(Paragraph(f"<b>Worth testing:</b> {spots}.", _BODY))
+    story = [KeepTogether(block)]
 
     error_players = data.get("defense_error_players")
     if error_players is not None and not error_players.empty:
         story.append(Spacer(1, 3 * mm))
-        story.append(Paragraph("Who makes them", _H3))
         story.append(
-            _df_table(
-                error_players,
-                [c for c in _DEFENSE_ERROR_PLAYER_COLS if c in error_players.columns],
+            KeepTogether(
+                [
+                    Paragraph("Who makes them", _H3),
+                    _df_table(
+                        error_players,
+                        [c for c in _DEFENSE_ERROR_PLAYER_COLS if c in error_players.columns],
+                    ),
+                ]
             )
         )
     return story
@@ -429,8 +583,8 @@ def build_scouting_pdf(data: dict) -> bytes:
     doc = SimpleDocTemplate(
         buffer,
         pagesize=A4,
-        leftMargin=15 * mm,
-        rightMargin=15 * mm,
+        leftMargin=_PAGE_MARGIN,
+        rightMargin=_PAGE_MARGIN,
         topMargin=14 * mm,
         bottomMargin=14 * mm,
         title=f"Scouting Report — {data['opponent']}",
