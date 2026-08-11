@@ -12,6 +12,7 @@ import time
 from sqlalchemy import select
 
 from db.engine import get_session
+from db.identity import refresh_display_names
 from db.models import Game
 from scraper.scrape_boxscores import scrape_boxscore
 from scraper.scrape_schedule import scrape_schedule
@@ -141,6 +142,15 @@ def run(
                     still_failed.append((code, year, game_id))
             if still_failed:
                 print(f"{len(still_failed)} box score(s) permanently failed: {still_failed}")
+
+        # Whether a player's name needs a disambiguator depends on every other
+        # player's name, so it can't be maintained row-by-row during the scrape
+        # above — adding one player can change an existing player's display
+        # name. One cheap idempotent pass at the end instead (db/identity.py).
+        renamed = refresh_display_names(session.connection())
+        session.commit()
+        if renamed:
+            print(f"Refreshed {renamed} player display name(s).")
     finally:
         session.close()
     return league_season_ids
