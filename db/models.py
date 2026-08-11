@@ -260,9 +260,17 @@ class PitchingGameLine(Base):
 
 class FieldingGameLine(Base):
     """One row per (game, player, position played) — the per-position
-    breakdown of the fielding totals BattingGameLine already stores for the
-    same player-game, so summing these across positions reproduces that row's
-    field_po/field_a/field_e/field_dp exactly.
+    breakdown of the fielding totals BattingGameLine stores for the same
+    player-game: summing these across positions reproduces that row's
+    field_po/field_a/field_e/field_dp exactly, for every player who has such a
+    row.
+
+    It is a superset of them, not a mirror. BattingGameLine is only written
+    when a player actually batted (pa or ab > 0), so a defensive substitute
+    who never came to the plate has no batting row at all — 5,088 player-games
+    across the scraped corpus, carrying 414 errors that were previously stored
+    nowhere. Those get fielding rows here regardless, which is why the two
+    tables' league-wide fielding totals differ by exactly that residue.
 
     This table exists because the box score's own `pos` is a *slash-joined
     path* of the positions occupied during one stint ("SS/P", "2B/P/P"), while
@@ -291,6 +299,15 @@ class FieldingGameLine(Base):
     a: Mapped[int] = mapped_column(Integer, default=0)
     e: Mapped[int] = mapped_column(Integer, default=0)
     dp: Mapped[int] = mapped_column(Integer, default=0)
+
+    # Battery stats, only meaningful at C (and sba at P, whom this league's
+    # scorers charge with a share of the steals allowed). `sba` is stolen
+    # bases *allowed* and excludes runners thrown out, so a catcher's attempts
+    # against are sba + csb — verified against the opposing team's own SB/CS
+    # totals, see docs/fielding_metrics_plan.md.
+    sba: Mapped[int] = mapped_column(Integer, default=0)
+    csb: Mapped[int] = mapped_column(Integer, default=0)
+    pb: Mapped[int] = mapped_column(Integer, default=0)
 
 
 class PlateAppearance(Base):
@@ -439,6 +456,11 @@ class FieldingSeasonStats(Base):
     a: Mapped[int] = mapped_column(Integer, default=0)
     e: Mapped[int] = mapped_column(Integer, default=0)
     dp: Mapped[int] = mapped_column(Integer, default=0)
+
+    # See FieldingGameLine — attempts against a catcher are sba + csb.
+    sba: Mapped[int] = mapped_column(Integer, default=0)
+    csb: Mapped[int] = mapped_column(Integer, default=0)
+    pb: Mapped[int] = mapped_column(Integer, default=0)
     computed_at: Mapped[dt.datetime] = mapped_column(DateTime, default=_now)
 
 

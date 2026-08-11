@@ -98,6 +98,9 @@ STAT_LABELS = {
     "avg_vs_lhp": "AVG vs LHP", "pa_vs_lhp": "PA vs LHP",
     "avg_vs_rhp": "AVG vs RHP", "pa_vs_rhp": "PA vs RHP",
     "e_per_team": "E per Team", "e_vs_league": "E vs League",
+    # Catcher throwing. "SB" here is steals *allowed*, and attempts are
+    # allowed + caught (see stats/rate_stats.py:caught_stealing_pct).
+    "sb_against": "SB Allowed", "cs": "CS", "sb_att": "Attempts", "cs_pct": "CS%", "pb": "PB",
 }
 
 STAT_FORMAT = {
@@ -119,6 +122,7 @@ STAT_FORMAT = {
     "g": ",.0f", "gs": ",.0f", "team_ip_share": ".0%", "expected_runs": ".2f",
     "slot": ",.0f", "avg_vs_lhp": ".3f", "pa_vs_lhp": ",.0f", "avg_vs_rhp": ".3f", "pa_vs_rhp": ",.0f",
     "e_per_team": ".1f", "e_vs_league": "+.1f",
+    "sb_against": ",.0f", "cs": ",.0f", "sb_att": ",.0f", "cs_pct": ".1%", "pb": ",.0f",
 }
 
 

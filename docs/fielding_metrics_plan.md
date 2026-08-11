@@ -96,6 +96,34 @@ Per game, per team, box-score record by box-score record:
 Net effect: ~99% of errors carry a real position, and summing any player's or team's rows
 across positions reproduces the box-score totals exactly.
 
+### Catcher throwing (added after the first cut)
+
+The same box-score records carry `field_sba`, `field_csb` and `field_pb`, which the scraper
+was already storing on `BattingGameLine` but nothing had ever aggregated or displayed. Two
+things had to be pinned down before building on them, both checked against the *opposing*
+team's own batting SB/CS in the same game:
+
+- **`field_sba` is stolen bases allowed, and excludes runners thrown out.** Per team-game it
+  equals the opponent's SB in 86% of cases but SB + CS in only 72%. League totals agree:
+  79,725 SB batted vs 76,690 `field_sba` fielded. So **attempts = `sba` + `csb`**, and
+  dividing by `sba` alone would overstate CS%.
+- **`field_csb` is that fielder's caught stealings**, matching the opponent's CS in 96% of
+  team-games.
+
+Two consequences worth keeping in the UI copy:
+
+- **Steals allowed are split between the catcher and the pitcher.** In a verified sample the
+  catcher carried 11 and the pitcher 2, together exactly matching the opponent's 13 SB. A
+  catcher's line is therefore their own share, not every steal the team conceded.
+- **The league CS rate is ~2.3%** (1,838 CS against 79,725 SB). That is real, not a parsing
+  bug — weak amateur catching, 7-inning games, and runners who run constantly. A catcher's
+  rate has to be read against the league figure, never against professional norms.
+
+Attribution differs from PO/A/DP: these are battery stats, so on a multi-position record they
+follow **C** (else **P**) wherever it appears in the path, rather than the first position
+named. A `3B/C` record's steals happened while catching; crediting them to third base would
+invent a third baseman with a caught stealing.
+
 ## Schema
 
 Two new tables, following the existing fact/derived split.
@@ -108,9 +136,18 @@ Two new tables, following the existing fact/derived split.
 | `position` | `P C 1B 2B 3B SS LF CF RF DH PH PR UNK` |
 | `appearances` | times the player appeared at this position in this game |
 | `po` `a` `e` `dp` | attributed per the rule above |
+| `sba` `csb` `pb` | steals allowed / caught stealing / passed balls, routed to C (else P) |
 
 **Derived — `fielding_season_stats`** (written only by `stats/`, rebuildable), unique on
 `(player_season_id, position)`: the same counting columns summed per season, plus `games`.
+
+Note the fact table is a **superset** of `BattingGameLine`'s fielding columns, not a mirror
+of them. `BattingGameLine` is only written when a player actually batted (`pa`/`ab` > 0), so a
+defensive substitute who never came to the plate has no batting row — 5,088 player-games
+across the corpus, carrying 414 errors and 2,518 steals allowed that were previously stored
+nowhere at all. Per player-game the two agree exactly wherever a batting row exists (0
+mismatches over 88,370); league-wide they differ by precisely that residue, and each of
+`e`/`sba`/`csb`/`pb` was checked to balance to the row.
 
 Team-level per-position totals are summed at read time in `data_access` from the players'
 rows, exactly as `team_season_stats` already does for batting/pitching — no third table.

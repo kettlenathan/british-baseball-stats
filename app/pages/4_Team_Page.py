@@ -8,8 +8,10 @@ import streamlit as st
 from app.components.charts import bar_chart
 from app.components.data_access import (
     batting_leaderboard,
+    league_catcher_throwing,
     league_fielding_by_position,
     pitching_leaderboard,
+    team_catcher_throwing,
     team_fielding_by_position,
     team_position_error_players,
     team_recent_games,
@@ -19,6 +21,7 @@ from app.components.data_access import (
 from app.components.filters import league_season_selector
 from app.components.formatting import (
     BATTING_COLUMN_CONFIG,
+    CATCHER_THROWING_COLUMN_CONFIG,
     FIELDING_COLUMN_CONFIG,
     PITCHING_COLUMN_CONFIG,
     RECENT_GAMES_COLUMN_CONFIG,
@@ -108,6 +111,31 @@ else:
                 use_container_width=True,
                 column_config=FIELDING_COLUMN_CONFIG,
             )
+
+    st.markdown("##### Catchers: throwing")
+    catchers_df = team_catcher_throwing(league_season_id, team)
+    if catchers_df.empty:
+        st.info("No stolen-base attempts recorded against this team's catchers.")
+    else:
+        st.dataframe(
+            catchers_df,
+            hide_index=True,
+            use_container_width=True,
+            column_config=CATCHER_THROWING_COLUMN_CONFIG,
+        )
+        league_cs = league_catcher_throwing(league_season_id)
+        league_note = (
+            f" League-wide, catchers throw out **{league_cs['cs_pct']:.1%}** of runners "
+            f"({league_cs['cs']:,} of {league_cs['sb_att']:,} attempts)."
+            if league_cs and league_cs["cs_pct"] is not None
+            else ""
+        )
+        st.caption(
+            "Attempts are steals allowed plus runners caught. Note this league's scorers charge "
+            "part of a team's steals allowed to the **pitcher**, so these are the catcher's own "
+            "share rather than every steal the team gave up — and a catcher's CS% depends heavily "
+            "on how quickly their pitchers work." + league_note
+        )
 
     if "UNK" in set(fielding_df["position"]):
         unknown = int(fielding_df.loc[fielding_df["position"] == "UNK", "e"].iloc[0])

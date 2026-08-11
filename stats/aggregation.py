@@ -29,7 +29,7 @@ _BATTING_COUNT_FIELDS = [
 
 _PITCHING_COUNT_FIELDS = ["outs_recorded", "h", "r", "er", "bb", "ibb", "so", "hr", "hbp", "bf"]
 
-_FIELDING_COUNT_FIELDS = ["appearances", "po", "a", "e", "dp"]
+_FIELDING_COUNT_FIELDS = ["appearances", "po", "a", "e", "dp", "sba", "csb", "pb"]
 
 
 def _player_seasons_for_league_season(session: Session, league_season_id: int | None) -> list[int]:

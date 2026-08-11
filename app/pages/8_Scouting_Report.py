@@ -12,6 +12,7 @@ from app.components.data_access import (
     batter_spray_points,
     batter_tendency,
     data_freshness,
+    league_catcher_throwing,
     league_fielding_by_position,
     lineup_recommendation,
     list_league_seasons,
@@ -22,6 +23,7 @@ from app.components.data_access import (
     scouting_hitters,
     scouting_pitching_staff,
     standings,
+    team_catcher_throwing,
     team_fielding_by_position,
     team_position_error_players,
     team_recent_games,
@@ -191,6 +193,33 @@ else:
                 column_config=column_config_for(defense_error_players),
             )
 
+st.markdown("##### Can we run on them?")
+opponent_catchers = team_catcher_throwing(league_season_id, opponent)
+league_cs = league_catcher_throwing(league_season_id)
+if opponent_catchers.empty:
+    st.info("No stolen-base attempts recorded against this opponent's catchers.")
+else:
+    st.dataframe(
+        opponent_catchers,
+        hide_index=True,
+        use_container_width=True,
+        column_config=column_config_for(opponent_catchers),
+    )
+    primary = opponent_catchers.iloc[0]
+    if primary["cs_pct"] is not None and league_cs and league_cs["cs_pct"] is not None:
+        verdict = "Run at will" if primary["cs_pct"] < league_cs["cs_pct"] else "Be selective"
+        st.markdown(
+            f"**{verdict}:** their main catcher **{primary['player']}** has thrown out "
+            f"**{primary['cs_pct']:.1%}** of runners ({int(primary['cs'])} of "
+            f"{int(primary['sb_att'])} attempts), against a league average of "
+            f"**{league_cs['cs_pct']:.1%}**."
+        )
+    st.caption(
+        "Attempts are steals allowed plus runners caught. Part of a team's steals allowed is "
+        "charged to the pitcher in this league's scoring, so these are the catcher's own share; "
+        "a slow-working pitcher inflates a catcher's steals against."
+    )
+
 st.divider()
 
 # --------------------------------------------------------------------------
@@ -325,6 +354,8 @@ if st.button("Generate PDF", type="primary"):
                 "hitter_details": hitter_details,
                 "defense": opponent_defense,
                 "defense_error_players": defense_error_players,
+                "catchers": opponent_catchers,
+                "league_catcher_cs_pct": (league_cs or {}).get("cs_pct"),
                 "staff": staff,
                 "pitcher_details": pitcher_details,
                 "lineup": (
