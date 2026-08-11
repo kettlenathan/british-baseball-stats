@@ -52,3 +52,28 @@ def test_current_d2_fetch_still_works_unmapped(session, monkeypatch):
 
     league_season = session.get(LeagueSeason, league_season_id)
     assert league_season.competition_slug == "2026-d2"
+
+
+def test_league_name_is_year_independent(session, monkeypatch):
+    """League is keyed on code alone while `tournamentname` describes one
+    competition-*year*, so scraping an older season must not relabel the whole
+    league. Scraping nbl 2024 once retitled the National Baseball League
+    "NBL 2024" for every season on the site.
+    """
+    for year, tournament_name in ((2026, "NBL 2026"), (2024, "NBL 2024")):
+        payload = _canned_payload(f"{year}-nbl", tournament_name)
+        monkeypatch.setattr(
+            "scraper.scrape_schedule.fetch_inertia", lambda *args, **kwargs: payload
+        )
+        scrape_schedule("nbl", year, session)
+
+    league = session.query(League).filter_by(code="nbl").one()
+    assert league.name == "National Baseball League"
+
+
+def test_every_scraped_league_code_has_a_canonical_name():
+    """Any code without one falls through to the year-specific scraped name,
+    which is exactly how the bug above happened."""
+    from scraper.discovery import CANONICAL_DISPLAY_NAMES
+
+    assert set(CANONICAL_DISPLAY_NAMES) >= {"nbl", "d2", "d3", "d4", "d5"}

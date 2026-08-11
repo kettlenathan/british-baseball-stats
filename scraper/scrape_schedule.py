@@ -15,7 +15,7 @@ from sqlalchemy.orm import Session
 from config import BASE_URL
 from db.models import Game, League, LeagueSeason, Season, Team, TeamSeason
 from db.upsert import upsert
-from scraper.discovery import CANONICAL_DISPLAY_NAMES, resolve_fetch_code
+from scraper.discovery import league_display_name, resolve_fetch_code
 from scraper.http_client import fetch_inertia
 
 _SLUG_RE = re.compile(r"^(\d{4})-(.+)$")
@@ -77,11 +77,10 @@ def scrape_schedule(
         League,
         {
             "code": league_code,
-            "name": (
-                league_name
-                or CANONICAL_DISPLAY_NAMES.get(league_code)
-                or tournament.get("tournamentname")
-                or league_code
+            "name": league_display_name(
+                league_code,
+                tournament_name=tournament.get("tournamentname"),
+                override=league_name,
             ),
             "tier": "senior" if is_senior else None,
             "is_senior": is_senior,

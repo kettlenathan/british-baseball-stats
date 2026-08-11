@@ -29,12 +29,37 @@ SENIOR_LEAGUE_CODES = ["nbl", "d2", "d3", "d4", "d5", "dev", "friendlies"]
 HISTORICAL_CODE_OVERRIDES: dict[str, str] = {"d2": "aaa", "d3": "aa", "d4": "a"}
 HISTORICAL_CODE_CUTOFF_YEAR = 2026  # first year the current d2/d3/d4 codes were used
 
-# Canonical display names for codes that changed name across the rename —
-# without this, League.name would flap between "AAA"/"AA"/"A" and "Division
-# 2"/"Division 3"/"Division 4" depending on which year happened to be scraped
+# Canonical display name per league code. `League` is keyed on `code` alone
+# while the scraped `tournamentname` describes one *competition-year*, so
+# without an entry here League.name is whatever year happened to be scraped
 # last (see db/upsert.py: upsert() overwrites all non-key columns on every
-# call).
-CANONICAL_DISPLAY_NAMES: dict[str, str] = {"d2": "Division 2", "d3": "Division 3", "d4": "Division 4"}
+# call). That bites two different ways:
+#   - the renamed codes flap between "AAA"/"AA"/"A" and "Division 2/3/4";
+#   - codes that were never renamed still carry the year in their scraped
+#     name, so scraping nbl 2024 relabelled the league "NBL 2024".
+# Every code the pipeline scrapes therefore needs an entry, not just the
+# renamed ones — see test_league_name_is_year_independent.
+CANONICAL_DISPLAY_NAMES: dict[str, str] = {
+    "nbl": "National Baseball League",
+    "d2": "Division 2",
+    "d3": "Division 3",
+    "d4": "Division 4",
+    "d5": "Division 5",
+}
+
+
+def league_display_name(
+    league_code: str,
+    tournament_name: str | None = None,
+    override: str | None = None,
+) -> str:
+    """The name to store on `League`, which must not depend on which year was
+    scraped last — `League` is keyed on code alone, so a year-specific name
+    silently relabels the whole league (scraping nbl 2024 once titled it
+    "NBL 2024"). The scraped `tournament_name` is only a fallback for codes
+    with no canonical entry, and `override` lets a caller force a name.
+    """
+    return override or CANONICAL_DISPLAY_NAMES.get(league_code) or tournament_name or league_code
 
 
 def resolve_fetch_code(canonical_code: str, year: int) -> str:
