@@ -240,6 +240,50 @@ def _hitters_section(data: dict) -> list:
     return story
 
 
+_DEFENSE_TABLE_COLS = ["position", "g", "po", "a", "e", "dp", "fpct", "e_per_team", "e_vs_league"]
+_DEFENSE_ERROR_PLAYER_COLS = ["position", "player", "g", "po", "a", "e", "fpct"]
+
+
+def _defense_section(data: dict) -> list:
+    story = [Paragraph("Their defence", _H2)]
+    defense = data.get("defense")
+    if defense is None or defense.empty:
+        story.append(Paragraph("No fielding data for this team.", _BODY))
+        return story
+    story.append(
+        Paragraph(
+            "Errors by position, against the average team's errors at the same position — the only "
+            "comparison that means anything, since shortstops and third basemen out-error corner "
+            "outfielders everywhere. Fielding % is context, not a verdict: it rewards a fielder who "
+            "never reaches the ball in the first place.",
+            _SMALL,
+        )
+    )
+    story.append(_df_table(defense, [c for c in _DEFENSE_TABLE_COLS if c in defense.columns]))
+
+    if "e_vs_league" in defense.columns:
+        weak = defense[defense["e_vs_league"] > 0].sort_values("e_vs_league", ascending=False)
+        if not weak.empty:
+            spots = ", ".join(
+                f"{row.position} ({int(row.e)} E, {row.e_vs_league:+.1f} vs league)"
+                for row in weak.head(3).itertuples()
+            )
+            story.append(Spacer(1, 2 * mm))
+            story.append(Paragraph(f"<b>Worth testing:</b> {spots}.", _BODY))
+
+    error_players = data.get("defense_error_players")
+    if error_players is not None and not error_players.empty:
+        story.append(Spacer(1, 3 * mm))
+        story.append(Paragraph("Who makes them", _H3))
+        story.append(
+            _df_table(
+                error_players,
+                [c for c in _DEFENSE_ERROR_PLAYER_COLS if c in error_players.columns],
+            )
+        )
+    return story
+
+
 _STAFF_TABLE_COLS = [
     "player", "throws", "g", "gs", "ip", "team_ip_share", "era", "whip", "k9", "bb9", "fip",
     "shrunk_fip", "fps_pct", "sv", "confidence",
@@ -352,6 +396,10 @@ def _methodology_section() -> list:
         "Probable pitchers are inferred from usage history (recency-weighted starts). The league publishes "
         "no rotation information.",
         "Batter-vs-pitcher history has no minimum sample size; a 3-for-5 career line is noise, not a scouting edge.",
+        "Errors are attributed to a position from the box score's own position field, falling back to the "
+        "play-by-play's scorer notation (E6, E4T) when a fielder moved position mid-game; the ~1.5% neither "
+        "source can place are shown as UNK rather than dropped. Error counts have no opportunity denominator, "
+        "so they measure where mistakes happened, not fielding skill.",
         "The lineup model plays 7 innings with deterministic base advancement, no steals, sacrifices or double "
         "plays, and ignores mercy/curfew rules (they truncate blowouts roughly equally for any order).",
         WAR_DISCLAIMER,
@@ -374,8 +422,9 @@ def _page_footer(canvas, doc):
 def build_scouting_pdf(data: dict) -> bytes:
     """Assemble the full report. `data` keys (all optional except our_team /
     opponent / league_label): fixture, freshness, standings, team_stats,
-    recent_games, hitters, hitter_details, staff, pitcher_details, lineup —
-    see the section builders above for each shape."""
+    recent_games, hitters, hitter_details, defense, defense_error_players,
+    staff, pitcher_details, lineup — see the section builders above for each
+    shape."""
     buffer = io.BytesIO()
     doc = SimpleDocTemplate(
         buffer,
@@ -390,6 +439,8 @@ def build_scouting_pdf(data: dict) -> bytes:
         _header_section(data)
         + _overview_section(data)
         + _hitters_section(data)
+        + [Spacer(1, 4 * mm)]
+        + _defense_section(data)
         + [Spacer(1, 4 * mm)]
         + _pitchers_section(data)
         + _lineup_section(data)

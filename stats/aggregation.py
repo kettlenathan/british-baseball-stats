@@ -10,6 +10,8 @@ from sqlalchemy.orm import Session
 from db.models import (
     BattingGameLine,
     BattingSeasonStats,
+    FieldingGameLine,
+    FieldingSeasonStats,
     PitchingGameLine,
     PitchingSeasonStats,
     PlateAppearance,
@@ -26,6 +28,8 @@ _BATTING_COUNT_FIELDS = [
 ]
 
 _PITCHING_COUNT_FIELDS = ["outs_recorded", "h", "r", "er", "bb", "ibb", "so", "hr", "hbp", "bf"]
+
+_FIELDING_COUNT_FIELDS = ["appearances", "po", "a", "e", "dp"]
 
 
 def _player_seasons_for_league_season(session: Session, league_season_id: int | None) -> list[int]:
@@ -48,6 +52,47 @@ def aggregate_batting(session: Session, league_season_id: int | None = None) -> 
             continue
         upsert(session, BattingSeasonStats, {"player_season_id": ps_id, **totals}, ["player_season_id"])
         count += 1
+    session.commit()
+    return count
+
+
+def aggregate_fielding(session: Session, league_season_id: int | None = None) -> int:
+    """Sum FieldingGameLine into one FieldingSeasonStats row per
+    (player_season, position). `games` is a distinct game count rather than a
+    sum of `appearances`, since a player can take the same position twice in
+    one game (moved off it and back)."""
+    player_season_ids = _player_seasons_for_league_season(session, league_season_id)
+    count = 0
+    for ps_id in player_season_ids:
+        cols = [func.sum(getattr(FieldingGameLine, f)).label(f) for f in _FIELDING_COUNT_FIELDS]
+        rows = session.execute(
+            select(
+                FieldingGameLine.position,
+                func.count(func.distinct(FieldingGameLine.game_id)).label("games"),
+                *cols,
+            )
+            .where(FieldingGameLine.player_season_id == ps_id)
+            .group_by(FieldingGameLine.position)
+        ).all()
+        # Derived table, so stale rows are cleared rather than left behind: a
+        # player who no longer has any line at a position (the fact rows were
+        # rebuilt under a changed attribution rule) must lose that row too.
+        session.query(FieldingSeasonStats).filter_by(player_season_id=ps_id).delete(
+            synchronize_session=False
+        )
+        for row in rows:
+            upsert(
+                session,
+                FieldingSeasonStats,
+                {
+                    "player_season_id": ps_id,
+                    "position": row.position,
+                    "games": row.games or 0,
+                    **{f: (getattr(row, f) or 0) for f in _FIELDING_COUNT_FIELDS},
+                },
+                ["player_season_id", "position"],
+            )
+            count += 1
     session.commit()
     return count
 

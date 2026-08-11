@@ -16,10 +16,16 @@ from app.components.data_access import (
     pitcher_spray_points,
     pitching_true_talent,
     player_batting_career,
+    player_fielding_by_position,
     player_league_seasons,
     player_pitching_career,
 )
-from app.components.formatting import BATTING_COLUMN_CONFIG, MATCHUP_COLUMN_CONFIG, PITCHING_COLUMN_CONFIG
+from app.components.formatting import (
+    BATTING_COLUMN_CONFIG,
+    FIELDING_COLUMN_CONFIG,
+    MATCHUP_COLUMN_CONFIG,
+    PITCHING_COLUMN_CONFIG,
+)
 
 st.set_page_config(page_title="Player Page", page_icon="🧑‍💼", layout="wide")
 st.title("Player Page")
@@ -194,3 +200,28 @@ if not pitch_df.empty:
             st.info("No matchup data available.")
         else:
             st.dataframe(matchup_df, hide_index=True, use_container_width=True, column_config=MATCHUP_COLUMN_CONFIG)
+
+# Fielding stands on its own rather than sitting under the batting or
+# pitching block: a player fields regardless of which of those two they show
+# up in, so it gets its own scope selector instead of borrowing one that a
+# pitching-only or batting-only player might never see.
+st.subheader(f"{player} — fielding by position")
+field_scope_id, field_scope_label = _scope_selector("field_scope")
+fielding_df = player_fielding_by_position(player, field_scope_id)
+if fielding_df.empty:
+    st.info("No fielding data recorded for this selection.")
+else:
+    st.caption(f"{field_scope_label} — ordered by errors, so the position they misplay most is first.")
+    st.dataframe(
+        fielding_df, hide_index=True, use_container_width=True, column_config=FIELDING_COLUMN_CONFIG
+    )
+    with_errors = fielding_df[fielding_df["e"] > 0]
+    if with_errors.empty:
+        st.caption("No errors recorded at any position.")
+    else:
+        worst = with_errors.iloc[0]
+        st.caption(
+            f"Most errors at **{worst['position']}** — {int(worst['e'])} in {int(worst['g'])} "
+            f"game(s) there. Error counts are raw totals with no chance-opportunity denominator, "
+            "so a position they play far more often will tend to top this list."
+        )

@@ -14,8 +14,9 @@ ERA+, a simplified WAR) from the raw play data, and serves it all through a Stre
 - **Player Explorer** / **Player Page** — browse and search all players; per-player career
   batting and pitching stat lines, pull/center/oppo batted-ball tendency with a spray-chart
   approximation (season or career, splittable by opposing pitcher/batter handedness), and
-  batter-vs-pitcher matchup history.
-- **Team Page** — team-level season stats and roster.
+  batter-vs-pitcher matchup history, and errors broken down by fielding position.
+- **Team Page** — team-level season stats, roster, and errors by position against the
+  league's average at the same position.
 - **Player Comparison** / **Team Comparison** — put 2+ players or teams side by side with
   trend charts across seasons.
 - **Methodology** — explains exactly how wOBA, wRC+, FIP, ERA+, and WAR are calculated here,

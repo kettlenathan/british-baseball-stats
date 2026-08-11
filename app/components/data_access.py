@@ -17,6 +17,7 @@ from db.models import (
     BattingSeasonStats,
     BattingTrueTalent,
     BattingWar,
+    FieldingSeasonStats,
     Game,
     League,
     LeagueSeason,
@@ -570,6 +571,207 @@ def team_recent_games(league_season_id: int, team_name: str, weeks: int = 3) -> 
             )
         df = pd.DataFrame(records)
         return df.sort_values("game_date", ascending=False) if not df.empty else df
+    finally:
+        session.close()
+
+
+# Defensive positions in scorecard order (1-9), then the non-fielding lineup
+# slots, then the residue the error-attribution rule couldn't place (see
+# scraper/scrape_boxscores.py:_extract_fielding_lines). Sorting by this rather
+# than alphabetically is what makes a fielding table read like a scorecard.
+_POSITION_ORDER = ["P", "C", "1B", "2B", "3B", "SS", "LF", "CF", "RF", "DH", "PH", "PR", "UNK"]
+_POSITION_RANK = {position: rank for rank, position in enumerate(_POSITION_ORDER)}
+
+# Positions where nobody is actually fielding, so a fielding row for them is
+# noise rather than information — dropped from every by-position view. "UNK"
+# is deliberately *not* in here: hiding unattributed errors would make the
+# per-position numbers silently fail to add up to the team's real total.
+_NON_FIELDING_POSITIONS = {"DH", "PH", "PR"}
+
+
+def _position_sort(df: pd.DataFrame) -> pd.DataFrame:
+    """Stable so callers can pre-sort within a position (e.g. by errors) and
+    keep that order inside each position group."""
+    return (
+        df.assign(_rank=df["position"].map(lambda p: _POSITION_RANK.get(p, 99)))
+        .sort_values("_rank", kind="stable")
+        .drop(columns="_rank")
+    )
+
+
+def _fielding_frame(rows: list[dict]) -> pd.DataFrame:
+    """Shared shaping for every by-position fielding view: drop the
+    non-fielding lineup slots, add fielding %, and order like a scorecard.
+
+    A position with games but no putouts/assists/errors is kept — an outfielder
+    who never had a ball hit to them still played there, and dropping the row
+    would misrepresent where the team fielded people.
+    """
+    df = pd.DataFrame(rows)
+    if df.empty:
+        return df
+    df = df[~df["position"].isin(_NON_FIELDING_POSITIONS)]
+    if df.empty:
+        return df
+    df["fpct"] = [fielding_pct(r.po, r.a, r.e) for r in df.itertuples()]
+    return _position_sort(df).reset_index(drop=True)
+
+
+@st.cache_data
+def team_fielding_by_position(league_season_id: int, team_name: str) -> pd.DataFrame:
+    """One row per position for a team: games, PO/A/E/DP and fielding %.
+
+    Summed at read time from the players' FieldingSeasonStats rows, the same
+    way team batting/pitching totals are — there's no team-level fielding
+    table. `g` is the number of player-games at the position (two players
+    splitting a game at 3B counts twice), which is what makes a per-position
+    error rate comparable across positions.
+    """
+    session = get_session()
+    try:
+        ts_id = _team_season_id(session, league_season_id, team_name)
+        if ts_id is None:
+            return pd.DataFrame()
+        rows = session.execute(
+            select(
+                FieldingSeasonStats.position,
+                func.sum(FieldingSeasonStats.games).label("g"),
+                func.sum(FieldingSeasonStats.po).label("po"),
+                func.sum(FieldingSeasonStats.a).label("a"),
+                func.sum(FieldingSeasonStats.e).label("e"),
+                func.sum(FieldingSeasonStats.dp).label("dp"),
+            )
+            .join(PlayerSeason, PlayerSeason.id == FieldingSeasonStats.player_season_id)
+            .where(PlayerSeason.team_season_id == ts_id)
+            .group_by(FieldingSeasonStats.position)
+        ).all()
+        return _fielding_frame(
+            [
+                {"position": r.position, "g": r.g or 0, "po": r.po or 0, "a": r.a or 0, "e": r.e or 0, "dp": r.dp or 0}
+                for r in rows
+            ]
+        )
+    finally:
+        session.close()
+
+
+@st.cache_data
+def team_position_error_players(league_season_id: int, team_name: str) -> pd.DataFrame:
+    """Who made a team's errors, one row per (position, player) — the
+    follow-up question to team_fielding_by_position's totals. Only players
+    with at least one error at that position appear."""
+    session = get_session()
+    try:
+        ts_id = _team_season_id(session, league_season_id, team_name)
+        if ts_id is None:
+            return pd.DataFrame()
+        rows = session.execute(
+            select(
+                FieldingSeasonStats.position,
+                Player.full_name,
+                FieldingSeasonStats.games,
+                FieldingSeasonStats.po,
+                FieldingSeasonStats.a,
+                FieldingSeasonStats.e,
+            )
+            .join(PlayerSeason, PlayerSeason.id == FieldingSeasonStats.player_season_id)
+            .join(Player, Player.id == PlayerSeason.player_id)
+            .where(PlayerSeason.team_season_id == ts_id, FieldingSeasonStats.e > 0)
+        ).all()
+        df = pd.DataFrame(
+            [
+                {"position": r.position, "player": r.full_name, "g": r.games, "po": r.po, "a": r.a, "e": r.e}
+                for r in rows
+                if r.position not in _NON_FIELDING_POSITIONS
+            ]
+        )
+        if df.empty:
+            return df
+        df["fpct"] = [fielding_pct(r.po, r.a, r.e) for r in df.itertuples()]
+        # Scorecard position order, and within a position the biggest
+        # contributor first — mergesort keeps that inner order stable.
+        return _position_sort(df.sort_values("e", ascending=False, kind="stable")).reset_index(drop=True)
+    finally:
+        session.close()
+
+
+@st.cache_data
+def player_fielding_by_position(full_name: str, league_season_id: int | None = None) -> pd.DataFrame:
+    """One row per position a player has fielded, ordered by errors so "which
+    position do they make the most errors at" is the first thing read.
+    `league_season_id=None` sums their whole career, matching how the Player
+    Page's other by-scope sections behave."""
+    session = get_session()
+    try:
+        query = (
+            select(
+                FieldingSeasonStats.position,
+                func.sum(FieldingSeasonStats.games).label("g"),
+                func.sum(FieldingSeasonStats.po).label("po"),
+                func.sum(FieldingSeasonStats.a).label("a"),
+                func.sum(FieldingSeasonStats.e).label("e"),
+                func.sum(FieldingSeasonStats.dp).label("dp"),
+            )
+            .join(PlayerSeason, PlayerSeason.id == FieldingSeasonStats.player_season_id)
+            .join(Player, Player.id == PlayerSeason.player_id)
+            .where(Player.full_name == full_name)
+            .group_by(FieldingSeasonStats.position)
+        )
+        if league_season_id is not None:
+            query = query.join(TeamSeason, TeamSeason.id == PlayerSeason.team_season_id).where(
+                TeamSeason.league_season_id == league_season_id
+            )
+        rows = session.execute(query).all()
+        df = _fielding_frame(
+            [
+                {"position": r.position, "g": r.g or 0, "po": r.po or 0, "a": r.a or 0, "e": r.e or 0, "dp": r.dp or 0}
+                for r in rows
+            ]
+        )
+        if df.empty:
+            return df
+        return df.sort_values(["e", "g"], ascending=False).reset_index(drop=True)
+    finally:
+        session.close()
+
+
+@st.cache_data
+def league_fielding_by_position(league_season_id: int) -> pd.DataFrame:
+    """League-wide errors per position, plus the per-team average — the
+    yardstick for whether a team's 9 errors at shortstop is unusual. Without
+    it a raw error count is unreadable: shortstops and third basemen make far
+    more errors than corner outfielders everywhere, so the comparison that
+    matters is against the same position, not against the team's other ones.
+    """
+    session = get_session()
+    try:
+        team_count = session.execute(
+            select(func.count(TeamSeason.id)).where(TeamSeason.league_season_id == league_season_id)
+        ).scalar() or 0
+        rows = session.execute(
+            select(
+                FieldingSeasonStats.position,
+                func.sum(FieldingSeasonStats.games).label("g"),
+                func.sum(FieldingSeasonStats.po).label("po"),
+                func.sum(FieldingSeasonStats.a).label("a"),
+                func.sum(FieldingSeasonStats.e).label("e"),
+                func.sum(FieldingSeasonStats.dp).label("dp"),
+            )
+            .join(PlayerSeason, PlayerSeason.id == FieldingSeasonStats.player_season_id)
+            .join(TeamSeason, TeamSeason.id == PlayerSeason.team_season_id)
+            .where(TeamSeason.league_season_id == league_season_id)
+            .group_by(FieldingSeasonStats.position)
+        ).all()
+        df = _fielding_frame(
+            [
+                {"position": r.position, "g": r.g or 0, "po": r.po or 0, "a": r.a or 0, "e": r.e or 0, "dp": r.dp or 0}
+                for r in rows
+            ]
+        )
+        if df.empty or not team_count:
+            return df
+        df["e_per_team"] = df["e"] / team_count
+        return df
     finally:
         session.close()
 

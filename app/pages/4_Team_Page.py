@@ -5,10 +5,21 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
 
 import streamlit as st
 
-from app.components.data_access import batting_leaderboard, pitching_leaderboard, team_recent_games, team_roster, team_season_stats
+from app.components.charts import bar_chart
+from app.components.data_access import (
+    batting_leaderboard,
+    league_fielding_by_position,
+    pitching_leaderboard,
+    team_fielding_by_position,
+    team_position_error_players,
+    team_recent_games,
+    team_roster,
+    team_season_stats,
+)
 from app.components.filters import league_season_selector
 from app.components.formatting import (
     BATTING_COLUMN_CONFIG,
+    FIELDING_COLUMN_CONFIG,
     PITCHING_COLUMN_CONFIG,
     RECENT_GAMES_COLUMN_CONFIG,
     ROSTER_COLUMN_CONFIG,
@@ -54,6 +65,57 @@ else:
         use_container_width=True,
         column_config=RECENT_GAMES_COLUMN_CONFIG,
     )
+
+st.subheader("Fielding by position")
+fielding_df = team_fielding_by_position(league_season_id, team)
+if fielding_df.empty:
+    st.info("No fielding data recorded for this team yet.")
+else:
+    league_fielding = league_fielding_by_position(league_season_id)
+    shown = fielding_df
+    if not league_fielding.empty and "e_per_team" in league_fielding.columns:
+        # Errors are only readable against the same position elsewhere in the
+        # league — shortstops and third basemen out-error corner outfielders
+        # everywhere, so "8 errors" means nothing without this column.
+        shown = fielding_df.merge(
+            league_fielding[["position", "e_per_team"]], on="position", how="left"
+        )
+        shown["e_vs_league"] = shown["e"] - shown["e_per_team"]
+
+    table_col, chart_col = st.columns([3, 2])
+    with table_col:
+        st.dataframe(
+            shown, hide_index=True, use_container_width=True, column_config=FIELDING_COLUMN_CONFIG
+        )
+        st.caption(
+            "E vs League compares this team to the average team's errors at the *same* position. "
+            "Fielding % is shown for context but rewards limited range — a fielder who never "
+            "reaches a ball never misplays it."
+        )
+    with chart_col:
+        with_errors = fielding_df[fielding_df["e"] > 0]
+        if with_errors.empty:
+            st.info("No errors recorded at any position.")
+        else:
+            st.plotly_chart(bar_chart(with_errors, "position", "e"), use_container_width=True)
+
+    error_players = team_position_error_players(league_season_id, team)
+    if not error_players.empty:
+        with st.expander("Who made them"):
+            st.dataframe(
+                error_players,
+                hide_index=True,
+                use_container_width=True,
+                column_config=FIELDING_COLUMN_CONFIG,
+            )
+
+    if "UNK" in set(fielding_df["position"]):
+        unknown = int(fielding_df.loc[fielding_df["position"] == "UNK", "e"].iloc[0])
+        st.caption(
+            f"{unknown} error(s) shown as UNK: the box score recorded them against a player who "
+            "changed position mid-game, and the play-by-play didn't name which position. They're "
+            "listed rather than dropped so the positions still add up to the team's real total."
+        )
 
 st.subheader("Roster")
 st.dataframe(

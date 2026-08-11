@@ -97,6 +97,7 @@ STAT_LABELS = {
     "slot": "Slot", "role": "Role",
     "avg_vs_lhp": "AVG vs LHP", "pa_vs_lhp": "PA vs LHP",
     "avg_vs_rhp": "AVG vs RHP", "pa_vs_rhp": "PA vs RHP",
+    "e_per_team": "E per Team", "e_vs_league": "E vs League",
 }
 
 STAT_FORMAT = {
@@ -117,6 +118,7 @@ STAT_FORMAT = {
     "pc1": ".2f", "pc2": ".2f", "silhouette": ".3f", "inertia": ".1f",
     "g": ",.0f", "gs": ",.0f", "team_ip_share": ".0%", "expected_runs": ".2f",
     "slot": ",.0f", "avg_vs_lhp": ".3f", "pa_vs_lhp": ",.0f", "avg_vs_rhp": ".3f", "pa_vs_rhp": ",.0f",
+    "e_per_team": ".1f", "e_vs_league": "+.1f",
 }
 
 
