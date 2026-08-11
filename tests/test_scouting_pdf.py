@@ -136,6 +136,45 @@ def _full_data() -> dict:
     }
 
 
+def test_no_table_is_wider_than_the_printable_frame():
+    """The failure this guards against is silent: reportlab sizes columns
+    from content and will happily draw a 15-column table straight off the
+    right edge of the page rather than raising."""
+    from reportlab.platypus import Table
+
+    import app.components.scouting_pdf as sp
+
+    widths = []
+    original = Table.wrap
+    try:
+        def record(self, avail_width, avail_height):
+            width, height = original(self, avail_width, avail_height)
+            widths.append(width)
+            return width, height
+
+        Table.wrap = record
+        build_scouting_pdf(_full_data())
+    finally:
+        Table.wrap = original
+
+    assert widths, "no tables were rendered — the fixture stopped exercising them"
+    too_wide = [w for w in widths if w > sp._FRAME_WIDTH + 0.5]
+    assert not too_wide, f"{len(too_wide)} table(s) exceed the {sp._FRAME_WIDTH:.0f}pt frame: {too_wide}"
+
+
+def test_wide_table_is_compressed_and_narrow_table_is_left_compact():
+    """A 15-column table has to be squeezed to the frame; a 3-column one must
+    not be stretched across it just because the room exists."""
+    import app.components.scouting_pdf as sp
+
+    wide = sp._df_table(_full_data()["staff"], _full_data()["staff"].columns.tolist())
+    assert wide.wrap(sp._FRAME_WIDTH, 10_000)[0] <= sp._FRAME_WIDTH + 0.5
+
+    narrow = sp._df_table(pd.DataFrame([{"team": "Them", "w": 10, "l": 4}]), ["team", "w", "l"])
+    assert narrow.wrap(sp._FRAME_WIDTH, 10_000)[0] < sp._FRAME_WIDTH * 0.75
+    assert narrow.hAlign == "LEFT"
+
+
 def test_spray_chart_png_renders():
     png = spray_chart_png(_POINTS, "This season")
     assert png[:8] == b"\x89PNG\r\n\x1a\n"
