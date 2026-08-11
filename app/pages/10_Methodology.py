@@ -30,6 +30,38 @@ st.markdown(
 
 st.divider()
 
+st.subheader("Following a player across seasons")
+st.markdown(
+    "The source site issues a **new player ID every season** — the same player on the same "
+    "team gets a different ID in 2024, 2025 and 2026 — so a career can't be assembled from "
+    "those IDs alone. Players are instead matched across seasons on their **name plus birth "
+    "year**, with the name compared after folding away capitalisation, accents and "
+    "punctuation (the source spells the same player `Adam MURRAY`, `ADAM MURRAY` and "
+    "`Adam Murray` in different seasons)."
+)
+st.markdown(
+    "Matching is deliberately cautious: **both** the name and the birth year must agree. "
+    "Plenty of names in this league belong to more than one real person — there are four "
+    "different Ben Carters — so matching on name alone would silently merge two players' "
+    "careers into one. Where the source has no birth year, or an obviously bogus one (a "
+    "birth year of `1` or `2021` appears on around 110 records), those seasons are left as "
+    "separate players rather than guessed at."
+)
+st.markdown(
+    "The source also sometimes records a birth year that is simply **wrong**, which would "
+    "split one player in two. Those are caught using squad numbers: a team can't field two "
+    "players wearing the same number in the same season, so the same name in the same "
+    "number for the same club, in seasons that never overlap, is one player — whatever the "
+    "birth years say. Where two players genuinely do overlap, they're left separate."
+)
+st.markdown(
+    "Finally, where two different players really do share a name, they're shown with their "
+    "birth year attached (`Ben CARTER (b. 1995)`) so their records stay separate rather "
+    "than being added together."
+)
+
+st.divider()
+
 st.subheader("wOBA and wRC+")
 st.markdown(
     "**wOBA** (weighted On-Base Average) values every way of reaching base by how many runs "

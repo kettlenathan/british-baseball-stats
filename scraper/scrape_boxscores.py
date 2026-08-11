@@ -44,6 +44,7 @@ import re
 from collections import Counter
 from typing import Any
 
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from config import BASE_URL
@@ -56,6 +57,12 @@ from db.models import (
     Player,
     PlayerSeason,
     TeamSeason,
+)
+from db.identity import (
+    normalize_name,
+    player_identity_key,
+    preferred_spelling,
+    roster_slot_key,
 )
 from db.upsert import upsert
 from scraper.discovery import resolve_fetch_code
@@ -462,6 +469,56 @@ def _extract_fielding_lines(
     return list(rows.values())
 
 
+def _resolve_by_roster_slot(
+    session: Session,
+    full_name: str,
+    team_id: int,
+    jersey_number: int | None,
+    league_season_id: int,
+) -> int | None:
+    """Find an existing player occupying this team's squad number, if any.
+
+    The last resort of the three identity checks, for the players whose `dob`
+    the site recorded *wrongly* rather than merely omitting — name and birth
+    year then disagree even though it is one person. A squad number is a slot
+    on one team's roster and a team cannot field two players wearing it at
+    once, so the same name in the same slot is the same person **provided the
+    candidate isn't already in this league-season**; if they are, the two are
+    genuinely different people and this returns None. See db/identity.py.
+    """
+    slot = roster_slot_key(full_name, team_id, jersey_number)
+    if slot is None:
+        return None
+    normalized, _team_id, _jersey = slot
+
+    candidates = session.execute(
+        select(Player.id, Player.full_name)
+        .join(PlayerSeason, PlayerSeason.player_id == Player.id)
+        .join(TeamSeason, TeamSeason.id == PlayerSeason.team_season_id)
+        .where(
+            TeamSeason.team_id == team_id,
+            PlayerSeason.jersey_number == jersey_number,
+        )
+        .distinct()
+    ).all()
+
+    for candidate_id, candidate_name in candidates:
+        if normalize_name(candidate_name) != normalized:
+            continue
+        already_playing = session.execute(
+            select(PlayerSeason.id)
+            .join(TeamSeason, TeamSeason.id == PlayerSeason.team_season_id)
+            .where(
+                PlayerSeason.player_id == candidate_id,
+                TeamSeason.league_season_id == league_season_id,
+            )
+            .limit(1)
+        ).scalar()
+        if already_playing is None:
+            return candidate_id
+    return None
+
+
 def scrape_boxscore(
     league_code: str,
     year: int,
@@ -486,12 +543,13 @@ def scrape_boxscore(
     game_plays = (original.get("gamePlays") or {}).get("all") or {}
 
     game = session.query(Game).filter_by(source_id=game_source_id).one()
-    team_season_by_source_id = {
-        ts.source_team_id: ts.id
-        for ts in session.query(TeamSeason).filter(
-            TeamSeason.id.in_([game.home_team_season_id, game.away_team_season_id])
-        )
-    }
+    team_seasons = session.query(TeamSeason).filter(
+        TeamSeason.id.in_([game.home_team_season_id, game.away_team_season_id])
+    ).all()
+    team_season_by_source_id = {ts.source_team_id: ts.id for ts in team_seasons}
+    # Needed to resolve players by roster slot below, which is a property of the
+    # persistent team rather than of its one-season instance.
+    team_id_by_team_season = {ts.id: ts.team_id for ts in team_seasons}
 
     by_player = _flatten_and_group(box_score)
 
@@ -516,27 +574,70 @@ def scrape_boxscore(
         last_name = last.get("lastname") or player_info.get("lastname")
         full_name = f"{first_name} {last_name}".strip() if first_name or last_name else str(source_player_id)
 
-        player_id = upsert(
-            session,
-            Player,
-            {
-                "source_id": source_player_id,
-                "first_name": first_name,
-                "last_name": last_name,
-                "full_name": full_name,
-                "birth_year": birth_year,
-                "bats": player_info.get("bats"),
-                "throws": player_info.get("throws"),
-                "nationality": player_info.get("nationality"),
-            },
-            ["source_id"],
-        )
-
         team_season_id = team_season_by_source_id.get(last["teamid"])
         if team_season_id is None:
             # Player attributed to a team not in this game's home/away pair
             # (shouldn't happen) — skip rather than corrupt the row.
             continue
+        jersey_number = last.get("uniform")
+
+        # Identity is name+birth_year, not the site's playerid — that is
+        # reissued every season, so keying Player on it fragments careers into
+        # one row per league-season (see db/identity.py). Resolution runs
+        # strongest-evidence-first, and only ever *finds* an existing player;
+        # falling through all three creates one.
+        #
+        # 1. A playerid is unstable *across* seasons but perfectly reliable
+        #    *within* the one roster entry it was issued for, so an id we have
+        #    already resolved pins its player. Without this, a spelling change
+        #    for the same id splits the player in two on the next scrape: the
+        #    site really does serve "Kenichiro MURATA"/"Kenchiro MURATA" and
+        #    "Owen BOURGEOIS"/"Owen Charles BOURGEOIS" for one id.
+        player_id = session.execute(
+            select(PlayerSeason.player_id)
+            .where(PlayerSeason.source_player_id == source_player_id)
+            .limit(1)
+        ).scalar()
+
+        # 2. Same normalized name and birth year.
+        identity_key = player_identity_key(full_name, birth_year, source_player_id)
+        if player_id is None:
+            player_id = session.execute(
+                select(Player.id).where(Player.identity_key == identity_key)
+            ).scalar()
+
+        # 3. Same roster slot, which catches the players whose `dob` the site
+        #    recorded wrongly rather than merely omitting.
+        if player_id is None:
+            player_id = _resolve_by_roster_slot(
+                session,
+                full_name=full_name,
+                team_id=team_id_by_team_season[team_season_id],
+                jersey_number=jersey_number,
+                league_season_id=game.league_season_id,
+            )
+
+        player_values = {
+            "source_id": source_player_id,
+            "first_name": first_name,
+            "last_name": last_name,
+            "full_name": full_name,
+            "birth_year": birth_year,
+            "bats": player_info.get("bats"),
+            "throws": player_info.get("throws"),
+            "nationality": player_info.get("nationality"),
+        }
+        if player_id is None:
+            player_id = upsert(
+                session, Player, {"identity_key": identity_key, **player_values}, ["identity_key"]
+            )
+        else:
+            # Refresh bio fields, but keep identity_key — re-keying a known
+            # player would be the very split described above — and keep the
+            # best spelling seen rather than whichever arrived last.
+            existing_name = session.get(Player, player_id).full_name
+            player_values["full_name"] = preferred_spelling([existing_name, full_name])
+            session.query(Player).filter(Player.id == player_id).update(player_values)
 
         player_season_id = upsert(
             session,
@@ -544,6 +645,7 @@ def scrape_boxscore(
             {
                 "player_id": player_id,
                 "team_season_id": team_season_id,
+                "source_player_id": source_player_id,
                 "jersey_number": last.get("uniform"),
                 "position_primary": last.get("pos"),
             },

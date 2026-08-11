@@ -22,6 +22,8 @@ from sqlalchemy import (
 )
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
+from db.identity import player_identity_key
+
 
 class Base(DeclarativeBase):
     pass
@@ -121,16 +123,55 @@ class TeamSeason(Base):
 
 
 class Player(Base):
-    """Persistent player identity — the site's playerid is stable platform-wide
-    (confirmed in recon), so it's used directly as source_id."""
+    """Persistent player identity, resolved by normalized name + birth year.
+
+    The site's `playerid` is **not** a stable person id — it is reissued for
+    every competition-instance roster entry, so it identifies a player-season,
+    not a player, and lives on `PlayerSeason.source_player_id`. Cross-season
+    identity is therefore name-matched here, the same way `Team` identity is;
+    `db/identity.py` owns the matching rule and documents why it is strict.
+    """
 
     __tablename__ = "players"
 
     id: Mapped[int] = mapped_column(primary_key=True)
-    source_id: Mapped[int] = mapped_column(Integer, unique=True, index=True)
+    # The uniqueness key: normalized name + birth year (see db/identity.py).
+    # Defaulted from the other columns so callers that build a Player without
+    # precomputing it — tests, ad-hoc scripts — still get a correct key.
+    identity_key: Mapped[str] = mapped_column(
+        String,
+        unique=True,
+        index=True,
+        default=lambda ctx: player_identity_key(
+            ctx.get_current_parameters()["full_name"],
+            ctx.get_current_parameters().get("birth_year"),
+            ctx.get_current_parameters().get("source_id"),
+        ),
+    )
+    # Most recent site id this player was seen under, kept for traceability
+    # only — deliberately not unique, since the site issues a new one every
+    # season. The full per-season set lives on PlayerSeason.source_player_id.
+    source_id: Mapped[int | None] = mapped_column(Integer, index=True, nullable=True)
     first_name: Mapped[str | None] = mapped_column(String, nullable=True)
     last_name: Mapped[str | None] = mapped_column(String, nullable=True)
     full_name: Mapped[str] = mapped_column(String, index=True)
+    # What the app shows and resolves a player by. Equal to full_name except
+    # where two different people share a name, when it carries a disambiguator
+    # — the app looks players up by this string, so a shared one silently adds
+    # two careers together. Maintained by db/identity.py:refresh_display_names,
+    # not per-row, because whether a name is shared is a fact about the whole
+    # table. Defaults to full_name so a Player built without it is still valid.
+    #
+    # Deliberately *not* a UNIQUE column even though the values are unique by
+    # construction: two players sharing a name are inserted one at a time
+    # during a scrape and only separated by the refresh pass at the end of the
+    # run, so a constraint here would abort the scrape rather than be satisfied
+    # a moment later. `build_display_names` owns the guarantee instead.
+    display_name: Mapped[str] = mapped_column(
+        String,
+        index=True,
+        default=lambda ctx: ctx.get_current_parameters()["full_name"],
+    )
     birth_year: Mapped[int | None] = mapped_column(Integer, nullable=True)
     bats: Mapped[str | None] = mapped_column(String, nullable=True)
     throws: Mapped[str | None] = mapped_column(String, nullable=True)
@@ -149,6 +190,10 @@ class PlayerSeason(Base):
     id: Mapped[int] = mapped_column(primary_key=True)
     player_id: Mapped[int] = mapped_column(ForeignKey("players.id"), index=True)
     team_season_id: Mapped[int] = mapped_column(ForeignKey("team_seasons.id"), index=True)
+    # The site's own `playerid`. It is scoped to this one competition-instance
+    # roster entry rather than to the person, which is why it lives here and
+    # not on Player — see db/identity.py.
+    source_player_id: Mapped[int | None] = mapped_column(Integer, index=True, nullable=True)
     jersey_number: Mapped[int | None] = mapped_column(Integer, nullable=True)
     position_primary: Mapped[str | None] = mapped_column(String, nullable=True)
 

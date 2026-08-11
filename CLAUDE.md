@@ -131,11 +131,42 @@ writes back upstream.
   positions keep adding up. Unlike the other ingestion writes it is delete-then-insert per
   game rather than a pure upsert, since which `(player, position)` rows a game produces
   depends on the attribution rule and a changed rule would otherwise strand old rows.
-- Player identity: the site's `playerid` is confirmed stable platform-wide, so
-  `players.source_id` uses it directly — no name-collision dedup needed. Team identity is
-  *not* trusted to be stable across years (`teamid` is scoped per competition-instance), so
-  cross-year `Team` identity is resolved by name matching in the upsert layer instead of a
-  site-provided id.
+- Player identity: the site's `playerid` is **not** a person id — it is reissued for every
+  competition-instance roster entry, so it identifies a player-season and lives on
+  `PlayerSeason.source_player_id`. (An early recon note claimed it was stable platform-wide;
+  that was drawn from a single season's payloads, where the reissue is invisible, and it cost
+  the dataset every multi-season career — 0 of 9,742 player rows spanned two league-seasons
+  before this was fixed. `scraper/recon/findings.md` now carries the correction.) Cross-year
+  `Player` identity is therefore resolved by name matching, exactly as `Team` identity already
+  is (`teamid` is likewise scoped per competition-instance). `db/identity.py` owns the rule:
+  `Player.identity_key` is normalized-name + birth year, where normalization folds case,
+  accents and punctuation (the site emits `ADAM MURRAY`/`Adam MURRAY`, `GáLVEZ`/`GALVEZ`,
+  curly and straight apostrophes), and `birth_year` comes from the site's `dob`. Matching is
+  deliberately **strict** — both parts must match, with no name-only fallback — because 323
+  normalized names in the corpus cover more than one birth year, and some of those really are
+  different people (four distinct Ben Carters). A player whose `dob` is missing *or
+  implausible* keeps the site id in their key and so stays a separate identity; the
+  plausibility window exists because `dob` carries placeholders (`1` x61, `2021` x38, `2078`)
+  that would otherwise merge two people who share a name and a placeholder.
+- `dob` is not only missing or placeholder-filled but sometimes **wrong** (`Franklin MARTINEZ`
+  is recorded as born both 1979 and 2001 while wearing number 4 for one team), so a `dob`
+  disagreement is evidence of two people, never proof. `identity.roster_slot_key` catches
+  these: a squad number is a slot on one team's roster and a team cannot field two players
+  wearing it at once, so the same name in the same slot across seasons is one person —
+  *provided the two never appear in the same league-season*, which is checked rather than
+  assumed (`resolve_roster_slot_merges`). On the corpus, 81 such conflicting-`dob` groups had
+  zero season overlap, and the check correctly refused 9 groups that did overlap. Squad number
+  `0` is excluded as a placeholder (2,751 of 9,741 roster entries), exactly like `dob=1`.
+- `Player.display_name` is what the app shows and resolves a player *by*: `data_access.py`
+  looks players up by the name string a user picked from a dropdown, so two different people
+  sharing a name would otherwise have their careers silently summed (`Ben CARTER` read as one
+  man with 741 PA when he is four). It equals `full_name` except where a name is shared, when
+  it gains a `(b. 1995)` suffix. Because "is this name shared" is a fact about the whole table
+  — adding one player can change an existing player's display name — it is rebuilt in one pass
+  by `identity.refresh_display_names` at the end of `scraper/pipeline.py:run`, never patched
+  row-by-row. `full_name` keeps the site's own best spelling (`identity.preferred_spelling`
+  prefers the house `Firstname SURNAME` style among the spellings actually scraped, and never
+  invents casing for a player the site only ever wrote one way).
 - `PitchingGameLine.outs_recorded` stores outs, not float innings-pitched — this avoids the
   classic "1.1 + 1.1 = 2.2 IP" bug from summing baseball's IP notation as if it were decimal.
   Convert with `stats/rate_stats.py:outs_to_ip` for display/formulas.

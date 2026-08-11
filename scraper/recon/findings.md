@@ -122,16 +122,29 @@ discovery mechanism per competition; the `/en/calendar/{year}` approach is a
 useful cross-check / way to discover competition codes that may not exist
 yet in the current year's set (e.g. a discontinued division).
 
-## Entity ID stability — player identity is a non-issue
+## Entity ID stability — player identity
 
-Every player has a **stable platform-wide numeric `playerid`** (e.g. `739750`),
-present in every batting/pitching line, distinct from `teamid` (e.g. `41854`,
-also stable per team-per-competition-instance) and `tournamentid` (e.g. `3514`,
-one per competition-year instance). The nested `player` object on every box
-score line includes `dob` (year only, e.g. `"1997"`), `bats`, `throws`,
-`nationality`. **This resolves the biggest open risk flagged in the plan** —
-no name-collision dedup heuristic is needed, `players.source_id = playerid`
-is a clean, reliable key.
+> **CORRECTED 2026-08-11.** The original conclusion below ("`playerid` is
+> stable platform-wide, player identity is a non-issue") is **wrong**, and it
+> propagated into the schema as `players.source_id = playerid`. `playerid` is
+> reissued for **every competition-instance roster entry**, so it identifies a
+> player-season, not a player. Measured across the whole scraped corpus: **0 of
+> 9,742 player rows appeared in more than one league-season** — e.g. Brandon
+> Jimenez, London Meteors, D3 is `420200` in 2024, `569446` in 2025 and
+> `751722` in 2026. The error was invisible to this recon because it only
+> examined payloads from a single season, within which `playerid` really is
+> consistent. Player identity is therefore name-matched (normalized name +
+> birth year) exactly as team identity is — see `db/identity.py`, and note the
+> `dob` field described below is what makes that safe.
+
+Every player has a numeric `playerid` (e.g. `739750`), present in every
+batting/pitching line, distinct from `teamid` (e.g. `41854`, also per
+team-per-competition-instance) and `tournamentid` (e.g. `3514`, one per
+competition-year instance). The nested `player` object on every box score line
+includes `dob` (year only, e.g. `"1997"`), `bats`, `throws`, `nationality`.
+`dob` is present on ~98% of rows but carries placeholder junk on the rest
+(`1` x61, `2021` x38, `2078`, ...), so it needs a plausibility check before
+being trusted as an identity component.
 
 Team identity: `teamid` appears stable within a competition instance; not yet
 confirmed whether the same physical team keeps the same `teamid` across

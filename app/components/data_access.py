@@ -103,7 +103,7 @@ def player_league_seasons(full_name: str) -> pd.DataFrame:
             .join(Player, Player.id == PlayerSeason.player_id)
             .join(Season, Season.id == LeagueSeason.season_id)
             .join(League, League.id == LeagueSeason.league_id)
-            .where(Player.full_name == full_name)
+            .where(Player.display_name == full_name)
             .order_by(Season.year.desc(), _LEAGUE_TIER_RANK)
         ).all()
         return pd.DataFrame(rows, columns=["league_season_id", "year", "league"])
@@ -125,7 +125,7 @@ def batting_leaderboard(league_season_id: int, min_pa: int = 0) -> pd.DataFrame:
         lg_woba = ctx.lg_woba if ctx else None
 
         rows = session.execute(
-            select(BattingSeasonStats, Player.full_name, TeamSeason.display_name, BattingWar.war, BattingWar.woba)
+            select(BattingSeasonStats, Player.display_name, TeamSeason.display_name, BattingWar.war, BattingWar.woba)
             .join(PlayerSeason, PlayerSeason.id == BattingSeasonStats.player_season_id)
             .join(Player, Player.id == PlayerSeason.player_id)
             .join(TeamSeason, TeamSeason.id == PlayerSeason.team_season_id)
@@ -175,7 +175,7 @@ def pitching_leaderboard(league_season_id: int, min_ip: float = 0) -> pd.DataFra
         lg_era = ctx.lg_era if ctx else None
 
         rows = session.execute(
-            select(PitchingSeasonStats, Player.full_name, TeamSeason.display_name, PitchingWar.war, PitchingWar.fip)
+            select(PitchingSeasonStats, Player.display_name, TeamSeason.display_name, PitchingWar.war, PitchingWar.fip)
             .join(PlayerSeason, PlayerSeason.id == PitchingSeasonStats.player_season_id)
             .join(Player, Player.id == PlayerSeason.player_id)
             .join(TeamSeason, TeamSeason.id == PlayerSeason.team_season_id)
@@ -219,7 +219,7 @@ def batting_true_talent(league_season_id: int, min_pa: int = 0) -> pd.DataFrame:
     session = get_session()
     try:
         rows = session.execute(
-            select(BattingTrueTalent, Player.full_name, TeamSeason.display_name)
+            select(BattingTrueTalent, Player.display_name, TeamSeason.display_name)
             .join(PlayerSeason, PlayerSeason.id == BattingTrueTalent.player_season_id)
             .join(Player, Player.id == PlayerSeason.player_id)
             .join(TeamSeason, TeamSeason.id == PlayerSeason.team_season_id)
@@ -251,7 +251,7 @@ def pitching_true_talent(league_season_id: int, min_ip: float = 0.0) -> pd.DataF
     session = get_session()
     try:
         rows = session.execute(
-            select(PitchingTrueTalent, Player.full_name, TeamSeason.display_name)
+            select(PitchingTrueTalent, Player.display_name, TeamSeason.display_name)
             .join(PlayerSeason, PlayerSeason.id == PitchingTrueTalent.player_season_id)
             .join(Player, Player.id == PlayerSeason.player_id)
             .join(TeamSeason, TeamSeason.id == PlayerSeason.team_season_id)
@@ -287,7 +287,7 @@ def batter_archetype_inputs(league_season_id: int, min_pa: int = 20) -> pd.DataF
     session = get_session()
     try:
         rows = session.execute(
-            select(BattingSeasonStats, BatterSpraySeasonStats, Player.full_name, TeamSeason.display_name)
+            select(BattingSeasonStats, BatterSpraySeasonStats, Player.display_name, TeamSeason.display_name)
             .join(PlayerSeason, PlayerSeason.id == BattingSeasonStats.player_season_id)
             .join(Player, Player.id == PlayerSeason.player_id)
             .join(TeamSeason, TeamSeason.id == PlayerSeason.team_season_id)
@@ -350,11 +350,11 @@ def team_roster(league_season_id: int) -> pd.DataFrame:
     session = get_session()
     try:
         rows = session.execute(
-            select(TeamSeason.display_name, Player.full_name, PlayerSeason.position_primary, PlayerSeason.jersey_number)
+            select(TeamSeason.display_name, Player.display_name, PlayerSeason.position_primary, PlayerSeason.jersey_number)
             .join(PlayerSeason, PlayerSeason.team_season_id == TeamSeason.id)
             .join(Player, Player.id == PlayerSeason.player_id)
             .where(TeamSeason.league_season_id == league_season_id)
-            .order_by(TeamSeason.display_name, Player.full_name)
+            .order_by(TeamSeason.display_name, Player.display_name)
         ).all()
         return pd.DataFrame(rows, columns=["team", "player", "position", "jersey_number"])
     finally:
@@ -669,7 +669,7 @@ def team_position_error_players(league_season_id: int, team_name: str) -> pd.Dat
         rows = session.execute(
             select(
                 FieldingSeasonStats.position,
-                Player.full_name,
+                Player.display_name,
                 FieldingSeasonStats.games,
                 FieldingSeasonStats.po,
                 FieldingSeasonStats.a,
@@ -681,7 +681,7 @@ def team_position_error_players(league_season_id: int, team_name: str) -> pd.Dat
         ).all()
         df = pd.DataFrame(
             [
-                {"position": r.position, "player": r.full_name, "g": r.games, "po": r.po, "a": r.a, "e": r.e}
+                {"position": r.position, "player": r.display_name, "g": r.games, "po": r.po, "a": r.a, "e": r.e}
                 for r in rows
                 if r.position not in _NON_FIELDING_POSITIONS
             ]
@@ -715,7 +715,7 @@ def player_fielding_by_position(full_name: str, league_season_id: int | None = N
             )
             .join(PlayerSeason, PlayerSeason.id == FieldingSeasonStats.player_season_id)
             .join(Player, Player.id == PlayerSeason.player_id)
-            .where(Player.full_name == full_name)
+            .where(Player.display_name == full_name)
             .group_by(FieldingSeasonStats.position)
         )
         if league_season_id is not None:
@@ -770,7 +770,7 @@ def team_catcher_throwing(league_season_id: int, team_name: str) -> pd.DataFrame
             return pd.DataFrame()
         rows = session.execute(
             select(
-                Player.full_name,
+                Player.display_name,
                 func.sum(FieldingSeasonStats.games).label("g"),
                 func.sum(FieldingSeasonStats.sba).label("sb_against"),
                 func.sum(FieldingSeasonStats.csb).label("cs"),
@@ -779,12 +779,12 @@ def team_catcher_throwing(league_season_id: int, team_name: str) -> pd.DataFrame
             .join(PlayerSeason, PlayerSeason.id == FieldingSeasonStats.player_season_id)
             .join(Player, Player.id == PlayerSeason.player_id)
             .where(PlayerSeason.team_season_id == ts_id, FieldingSeasonStats.position == "C")
-            .group_by(Player.full_name)
+            .group_by(Player.display_name)
         ).all()
         return _catcher_frame(
             [
                 {
-                    "player": r.full_name, "g": r.g or 0, "sb_against": r.sb_against or 0,
+                    "player": r.display_name, "g": r.g or 0, "sb_against": r.sb_against or 0,
                     "cs": r.cs or 0, "pb": r.pb or 0,
                 }
                 for r in rows
@@ -810,7 +810,7 @@ def player_catcher_throwing(full_name: str, league_season_id: int | None = None)
             )
             .join(PlayerSeason, PlayerSeason.id == FieldingSeasonStats.player_season_id)
             .join(Player, Player.id == PlayerSeason.player_id)
-            .where(Player.full_name == full_name, FieldingSeasonStats.position == "C")
+            .where(Player.display_name == full_name, FieldingSeasonStats.position == "C")
         )
         if league_season_id is not None:
             query = query.join(TeamSeason, TeamSeason.id == PlayerSeason.team_season_id).where(
@@ -928,7 +928,7 @@ def _batting_career_rows(session, names: list[str]) -> list[dict]:
             Season.year,
             League.code,
             TeamSeason.display_name,
-            Player.full_name,
+            Player.display_name,
             BattingSeasonStats,
             BattingWar.war,
             BattingWar.woba,
@@ -942,8 +942,8 @@ def _batting_career_rows(session, names: list[str]) -> list[dict]:
         .join(Season, Season.id == LeagueSeason.season_id)
         .outerjoin(BattingWar, BattingWar.player_season_id == BattingSeasonStats.player_season_id)
         .outerjoin(LeagueSeasonContext, LeagueSeasonContext.league_season_id == TeamSeason.league_season_id)
-        .where(Player.full_name.in_(names))
-        .order_by(Player.full_name, Season.year)
+        .where(Player.display_name.in_(names))
+        .order_by(Player.display_name, Season.year)
     ).all()
 
     records = []
@@ -1017,7 +1017,7 @@ def _pitching_career_rows(session, names: list[str]) -> list[dict]:
             Season.year,
             League.code,
             TeamSeason.display_name,
-            Player.full_name,
+            Player.display_name,
             PitchingSeasonStats,
             PitchingWar.war,
             PitchingWar.fip,
@@ -1032,8 +1032,8 @@ def _pitching_career_rows(session, names: list[str]) -> list[dict]:
         .join(Season, Season.id == LeagueSeason.season_id)
         .outerjoin(PitchingWar, PitchingWar.player_season_id == PitchingSeasonStats.player_season_id)
         .outerjoin(LeagueSeasonContext, LeagueSeasonContext.league_season_id == TeamSeason.league_season_id)
-        .where(Player.full_name.in_(names))
-        .order_by(Player.full_name, Season.year)
+        .where(Player.display_name.in_(names))
+        .order_by(Player.display_name, Season.year)
     ).all()
 
     records = []
@@ -1150,7 +1150,7 @@ def player_pitching_comparison(names: list[str]) -> pd.DataFrame:
 def all_player_names() -> list[str]:
     session = get_session()
     try:
-        return sorted({row[0] for row in session.execute(select(Player.full_name))})
+        return sorted({row[0] for row in session.execute(select(Player.display_name))})
     finally:
         session.close()
 
@@ -1237,7 +1237,7 @@ def batter_tendency(full_name: str, league_season_id: int | None = None) -> dict
             select(BatterSpraySeasonStats)
             .join(PlayerSeason, PlayerSeason.id == BatterSpraySeasonStats.player_season_id)
             .join(Player, Player.id == PlayerSeason.player_id)
-            .where(Player.full_name == full_name)
+            .where(Player.display_name == full_name)
         )
         if league_season_id is not None:
             query = query.join(TeamSeason, TeamSeason.id == PlayerSeason.team_season_id).where(
@@ -1287,7 +1287,7 @@ def batter_spray_points(
             select(PlateAppearance)
             .join(PlayerSeason, PlayerSeason.id == PlateAppearance.batter_player_season_id)
             .join(Player, Player.id == PlayerSeason.player_id)
-            .where(Player.full_name == full_name, PlateAppearance.hitpull.is_not(None))
+            .where(Player.display_name == full_name, PlateAppearance.hitpull.is_not(None))
         )
         if league_season_id is not None:
             query = query.join(TeamSeason, TeamSeason.id == PlayerSeason.team_season_id).where(
@@ -1330,7 +1330,7 @@ def pitcher_spray_points(
             select(PlateAppearance)
             .join(PlayerSeason, PlayerSeason.id == PlateAppearance.pitcher_player_season_id)
             .join(Player, Player.id == PlayerSeason.player_id)
-            .where(Player.full_name == full_name, PlateAppearance.hitpull.is_not(None))
+            .where(Player.display_name == full_name, PlateAppearance.hitpull.is_not(None))
         )
         if league_season_id is not None:
             query = query.join(TeamSeason, TeamSeason.id == PlayerSeason.team_season_id).where(
@@ -1373,7 +1373,7 @@ def _matchup_rows(session, full_name: str, as_batter: bool, league_season_id: in
     OpponentPlayer = aliased(Player)
 
     query = (
-        select(BatterPitcherMatchup, OpponentPlayer.full_name, Season.year, League.code)
+        select(BatterPitcherMatchup, OpponentPlayer.display_name, Season.year, League.code)
         .join(PlayerSeason, PlayerSeason.id == self_ps_col)
         .join(Player, Player.id == PlayerSeason.player_id)
         .join(TeamSeason, TeamSeason.id == PlayerSeason.team_season_id)
@@ -1382,7 +1382,7 @@ def _matchup_rows(session, full_name: str, as_batter: bool, league_season_id: in
         .join(League, League.id == LeagueSeason.league_id)
         .join(OpponentSeason, OpponentSeason.id == opp_ps_col)
         .join(OpponentPlayer, OpponentPlayer.id == OpponentSeason.player_id)
-        .where(Player.full_name == full_name)
+        .where(Player.display_name == full_name)
     )
     if league_season_id is not None:
         query = query.where(TeamSeason.league_season_id == league_season_id)
@@ -1500,7 +1500,7 @@ def scouting_hitters(league_season_id: int, team_name: str) -> pd.DataFrame:
         ctx = _lg_context(session, league_season_id)
         lg_woba = ctx.lg_woba if ctx else None
         rows = session.execute(
-            select(BattingSeasonStats, Player.full_name, Player.bats, BattingTrueTalent, BatterSpraySeasonStats)
+            select(BattingSeasonStats, Player.display_name, Player.bats, BattingTrueTalent, BatterSpraySeasonStats)
             .join(PlayerSeason, PlayerSeason.id == BattingSeasonStats.player_season_id)
             .join(Player, Player.id == PlayerSeason.player_id)
             .join(TeamSeason, TeamSeason.id == PlayerSeason.team_season_id)
@@ -1557,7 +1557,7 @@ def scouting_pitching_staff(league_season_id: int, team_name: str) -> pd.DataFra
         for row in usage:
             ps_id = row["player_season_id"]
             detail = session.execute(
-                select(Player.full_name, Player.throws, PitchingSeasonStats, PitchingTrueTalent)
+                select(Player.display_name, Player.throws, PitchingSeasonStats, PitchingTrueTalent)
                 .select_from(PlayerSeason)
                 .join(Player, Player.id == PlayerSeason.player_id)
                 .outerjoin(PitchingSeasonStats, PitchingSeasonStats.player_season_id == PlayerSeason.id)
@@ -1617,12 +1617,12 @@ def roster_vs_pitcher(league_season_id: int, team_name: str, pitcher_name: str) 
         BatterSeason, BatterPlayer = aliased(PlayerSeason), aliased(Player)
         PitcherSeason, PitcherPlayer = aliased(PlayerSeason), aliased(Player)
         rows = session.execute(
-            select(BatterPitcherMatchup, BatterPlayer.full_name)
+            select(BatterPitcherMatchup, BatterPlayer.display_name)
             .join(BatterSeason, BatterSeason.id == BatterPitcherMatchup.batter_player_season_id)
             .join(BatterPlayer, BatterPlayer.id == BatterSeason.player_id)
             .join(PitcherSeason, PitcherSeason.id == BatterPitcherMatchup.pitcher_player_season_id)
             .join(PitcherPlayer, PitcherPlayer.id == PitcherSeason.player_id)
-            .where(PitcherPlayer.full_name == pitcher_name, BatterPlayer.id.in_(roster_player_ids))
+            .where(PitcherPlayer.display_name == pitcher_name, BatterPlayer.id.in_(roster_player_ids))
         ).all()
         by_batter: dict[str, dict[str, int]] = {}
         for matchup, batter_name in rows:
@@ -1652,7 +1652,7 @@ def _vs_hand_woba_rows(session, player_names: list[str], throws: str, as_batter:
     component_fields = ["ab", "h", "doubles", "triples", "hr", "bb", "ibb", "hbp", "so", "sf"]
     rows = session.execute(
         select(
-            own_player.full_name,
+            own_player.display_name,
             func.count().label("pa"),
             *[func.sum(getattr(PlateAppearance, f)).label(f) for f in component_fields],
         )
@@ -1660,15 +1660,15 @@ def _vs_hand_woba_rows(session, player_names: list[str], throws: str, as_batter:
         .join(own_player, own_player.id == own_season.player_id)
         .join(opp_season, opp_season.id == opp_col)
         .join(opp_player, opp_player.id == opp_season.player_id)
-        .where(own_player.full_name.in_(player_names), opp_hand == throws)
-        .group_by(own_player.full_name)
+        .where(own_player.display_name.in_(player_names), opp_hand == throws)
+        .group_by(own_player.display_name)
     ).all()
     records = []
     for row in rows:
         components = SimpleNamespace(**{f: (getattr(row, f) or 0) for f in component_fields})
         records.append(
             {
-                "player": row.full_name,
+                "player": row.display_name,
                 "pa": row.pa,
                 "woba": compute_woba(components),
                 "avg": avg(components.h, components.ab),
