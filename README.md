@@ -22,8 +22,9 @@ ERA+, a simplified WAR) from the raw play data, and serves it all through a Stre
 - **Methodology** — explains exactly how wOBA, wRC+, FIP, ERA+, and WAR are calculated here,
   and where they diverge from official definitions (see [Methodology](#methodology--war-disclaimer)
   below).
-- **Feedback** — report a bug or suggest a feature directly from the app; submissions are
-  filed as GitHub issues on this repo.
+- **Feedback & Support** — report a bug or suggest a feature directly from the app
+  (submissions are filed as GitHub issues on this repo), plus background on why the project
+  exists and a tip jar for anyone who wants to support it.
 
 A **Data Admin** page for triggering scraper runs also exists, but is only available when
 running the app locally — it's excluded from the hosted deployment (see
@@ -107,5 +108,5 @@ See `CLAUDE.md`'s "Deployment" section for the full checklist and reasoning.
 
 ## Contributing feedback
 
-Found a bug, a stat that looks wrong, or have a feature idea? Use the **Feedback** page in
-the app itself — it files a GitHub issue on this repo directly.
+Found a bug, a stat that looks wrong, or have a feature idea? Use the **Feedback & Support**
+page in the app itself — it files a GitHub issue on this repo directly.

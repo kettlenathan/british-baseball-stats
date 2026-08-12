@@ -1873,7 +1873,7 @@ def lineup_recommendation(
 
 @st.cache_data
 def coverage_summary() -> dict:
-    """Headline counts of what's in the database, for the Back Page.
+    """Headline counts of what's in the database, for the Feedback & Support page.
 
     Read live rather than written into the copy so the page can't quietly go
     stale as more seasons are scraped.
