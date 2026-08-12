@@ -1,4 +1,4 @@
-"""Backfill divisions and game phase for already-scraped league-seasons.
+"""Backfill divisions, game phase and result type for scraped league-seasons.
 
 Everything this needs is already on disk: the schedule payload carrying each
 game's `wbsc_tournament_group_id` and round is in data/raw_cache/schedule,
@@ -28,7 +28,7 @@ from db.models import Game, League, LeagueSeason, Season
 from scraper import cache
 from scraper.discovery import resolve_fetch_code
 from scraper.http_client import extract_inertia_page, fetch_html
-from scraper.scrape_schedule import _game_phase, _modal_round_id
+from scraper.scrape_schedule import _classify_game, _game_phase, _modal_round_id
 from scraper.scrape_standings import apply_divisions, parse_standings_divisions
 
 # Long enough that nothing already cached is ever considered stale: this
@@ -49,7 +49,9 @@ def backfill_league_season(
     session: Session, league_season_id: int, slug: str, allow_fetch: bool = False
 ) -> dict[str, int | str]:
     """Backfill one league-season. Returns a small result summary for the CLI."""
-    result: dict[str, int | str] = {"slug": slug, "games": 0, "playoffs": 0, "divisions": 0}
+    result: dict[str, int | str] = {
+        "slug": slug, "games": 0, "playoffs": 0, "divisions": 0, "recovered": 0
+    }
 
     schedule_body = _cached_or_fetch(
         f"{BASE_URL}/en/events/{slug}/schedule-and-results", "schedule", slug, allow_fetch
@@ -61,22 +63,41 @@ def backfill_league_season(
         games = (page or {}).get("props", {}).get("games", [])
         modal_round_id = _modal_round_id(games)
         playoffs = 0
+        recovered = 0
         for g in games:
             phase = _game_phase(
                 g.get("gametypelabel"), g.get("wbsc_tournament_round_id"), modal_round_id
             )
             playoffs += phase == "playoff"
-            # Updated by source_id rather than upserted: these games already
-            # exist and only the two new columns are being filled in, so
-            # there is no reason to rewrite scores or status from a payload
-            # that may be older than the last real scrape.
+            status, result_type = _classify_game(
+                g.get("gamestatus", 0),
+                g.get("gamestatustext", ""),
+                g.get("homeruns"),
+                g.get("awayruns"),
+                g.get("innings"),
+            )
+            # Unlike the other columns here this *corrects* status rather
+            # than filling in a blank: forfeits and result-only games were
+            # previously classified "unknown" and dropped from every record
+            # in the app, so re-running this is what recovers them.
+            existing = session.execute(
+                select(Game.status).where(Game.source_id == g["id"])
+            ).scalar_one_or_none()
+            if existing is not None and existing != "final" and status == "final":
+                recovered += 1
             session.execute(
                 update(Game)
                 .where(Game.source_id == g["id"])
-                .values(source_group_id=g.get("wbsc_tournament_group_id"), phase=phase)
+                .values(
+                    source_group_id=g.get("wbsc_tournament_group_id"),
+                    phase=phase,
+                    status=status,
+                    result_type=result_type,
+                )
             )
         result["games"] = len(games)
         result["playoffs"] = playoffs
+        result["recovered"] = recovered
         session.commit()
 
     standings_body = _cached_or_fetch(
@@ -113,7 +134,7 @@ def main() -> None:
             query = query.where(LeagueSeason.id == args.league_season_id)
 
         rows = session.execute(query).all()
-        totals = {"games": 0, "playoffs": 0, "divisions": 0}
+        totals = {"games": 0, "playoffs": 0, "divisions": 0, "recovered": 0}
         for league_season_id, code, year in rows:
             slug = f"{year}-{resolve_fetch_code(code, year)}"
             result = backfill_league_season(session, league_season_id, slug, args.allow_fetch)
@@ -122,12 +143,17 @@ def main() -> None:
             note = f"  [{result['note']}]" if result.get("note") else ""
             print(
                 f"{slug:10s} games={result['games']:4d} playoff={result['playoffs']:3d} "
-                f"divisions={result['divisions']}{note}"
+                f"divisions={result['divisions']} recovered={result['recovered']:3d}{note}"
             )
         print(
             f"\nTotal: {totals['games']} games ({totals['playoffs']} playoff), "
             f"{totals['divisions']} divisions across {len(rows)} league-season(s)."
         )
+        if totals["recovered"]:
+            print(
+                f"Recovered {totals['recovered']} game(s) that had a real result but were "
+                "previously classified 'unknown' and excluded from every record."
+            )
     finally:
         session.close()
 

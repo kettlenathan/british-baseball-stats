@@ -130,9 +130,39 @@ st.markdown(
 st.markdown(
     "Tested by holding out games and predicting them: the rating beats ranking teams by win "
     "percentage by a small margin overall (0.7% on log loss), and that margin is "
-    "concentrated almost entirely in the teams with lopsided schedules, where it is around "
-    "3%. Where a schedule is already balanced, the rating and the raw record agree — which "
-    "is the point. Both are far better than guessing or than always picking the home team."
+    "concentrated in the teams with lopsided schedules, where it is around three and a half "
+    "times larger. Where a schedule is already balanced, the rating and the raw record agree "
+    "— which is the point. Both are far better than guessing or than always picking the home "
+    "team."
+)
+
+st.divider()
+
+st.subheader("Forfeits, unscored games, and seasons still in progress")
+st.markdown(
+    "Not every result on the record came from a game that was played. Two kinds turn up "
+    "throughout this data:"
+)
+st.markdown(
+    "- **Forfeits** — awarded 7-0 without anyone taking the field.\n"
+    "- **Result-only games** — genuinely contested, with a real score like 14-8 recorded, "
+    "but no scoresheet ever entered, so there are no innings, no line score and no player "
+    "statistics."
+)
+st.markdown(
+    "Both count toward **records and standings**, matching the federation's own published "
+    "tables — 588 such games across the seasons here. Neither counts toward **runs, rate "
+    "stats or a division's scoring environment**, because no runs were actually scored in a "
+    "forfeit and no at-bats were recorded in either. A team's runs per game is therefore per "
+    "game *played*, which can be fewer than the games in its win-loss record."
+)
+st.markdown(
+    "Separately: the source site publishes each season's **full fixture list in advance**, so "
+    "where a season is still running the app can say how much of it has happened rather than "
+    "presenting a partial table as if it were final. Standings and ratings for a live season "
+    "are a snapshot of games played to date, and team pages show how many fixtures remain "
+    "and whether the run-in is harder or easier than the season so far. Scheduled games never "
+    "affect a rating — only results do."
 )
 
 st.divider()

@@ -12,6 +12,7 @@ from app.components.data_access import (
     division_environments,
     pitching_leaderboard,
     pitching_true_talent,
+    season_progress,
     standings,
 )
 from app.components.filters import (
@@ -131,6 +132,14 @@ with tab_pitching:
             )
 
 with tab_standings:
+    progress = season_progress(league_season_id)
+    if not progress["complete"] and progress["total"]:
+        st.info(
+            f"**Season in progress** — {progress['played']} of {progress['total']} league "
+            f"fixtures played ({progress['pct_complete']:.0%}). The full schedule is "
+            "published in advance, so these are standings to date, not final placings."
+        )
+
     df = standings(league_season_id)
     if df.empty:
         st.info("No completed games yet.")

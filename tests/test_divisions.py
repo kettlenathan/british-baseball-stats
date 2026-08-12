@@ -17,14 +17,16 @@ from db.models import (
     Season,
     Team,
     TeamSeason,
+    TeamStrength,
 )
-from scraper.scrape_schedule import _game_phase, _modal_round_id
+from scraper.scrape_schedule import _classify_game, _game_phase, _modal_round_id
 from scraper.scrape_standings import (
     DivisionBlock,
     apply_divisions,
     parse_standings_divisions,
 )
 from stats.league_context import compute_division_contexts, compute_league_context
+from stats.team_strength import compute_team_strength
 
 
 # --------------------------------------------------------------------------
@@ -159,6 +161,99 @@ def test_unlabelled_game_on_an_off_round_is_a_playoff():
 def test_unlabelled_game_on_the_main_round_is_regular_season():
     assert _game_phase("A", 2194, 2194) == "regular"
     assert _game_phase(None, 100, 100) == "regular"
+
+
+# --------------------------------------------------------------------------
+# Result vs box score: forfeits and unscored games
+# --------------------------------------------------------------------------
+
+
+def test_ordinary_final_is_a_played_game():
+    assert _classify_game(3, "F", 5, 3, 7) == ("final", "played")
+    assert _classify_game(3, "F/5", 9, 3, 5) == ("final", "played")
+    assert _classify_game(2, "F", 17, 10, 7) == ("final", "played")
+
+
+def test_forfeit_is_a_final_result_with_no_box_score():
+    """gamestatus 4, blank text, 7-0, no innings: awarded without play. 360
+    of these were previously classified "unknown" and dropped from every
+    record in the app, though the federation's own standings count them."""
+    assert _classify_game(4, "", 7, 0, 0) == ("final", "forfeit")
+    assert _classify_game(4, "", 0, 7, 0) == ("final", "forfeit")
+
+
+def test_result_only_game_counts_but_carries_no_statistics():
+    """A real score with no innings, no line score and no hits: contested,
+    but nobody entered a scoresheet."""
+    assert _classify_game(3, "", 14, 8, 0) == ("final", "result_only")
+    assert _classify_game(3, "", 10, 8, 0) == ("final", "result_only")
+
+
+def test_seven_nil_that_went_the_distance_is_a_played_game():
+    """The discriminator is the absence of any record of play, not the
+    score: a genuine 7-0 win has innings behind it."""
+    assert _classify_game(3, "F", 7, 0, 7) == ("final", "played")
+
+
+def test_cancelled_game_is_not_a_result_even_with_a_stray_score():
+    assert _classify_game(-3, "", 0, 0, 0) == ("cancelled", None)
+    assert _classify_game(-3, "", 5, 2, 0) == ("cancelled", None)
+
+
+def test_scheduled_and_postponed_games_have_no_result_type():
+    assert _classify_game(0, "", 0, 0, 0) == ("scheduled", None)
+    assert _classify_game(-1, "", 0, 0, 0) == ("postponed", None)
+
+
+def test_abandoned_game_keeps_its_partial_box_score():
+    """Called off part-way ("T6"): innings were played and the score
+    stands, so there is a result and a partial box score behind it."""
+    assert _classify_game(3, "T6", 6, 1, 6) == ("final", "played")
+
+
+def test_scoreless_unfinished_record_stays_unknown():
+    assert _classify_game(9, "", 0, 0, 0) == ("unknown", None)
+
+
+def test_only_played_games_are_queued_for_box_score_fetching(session, monkeypatch):
+    """Requesting a scoresheet for a forfeit spends a rate-limited request
+    to find nothing, so those must not reach the fetch list."""
+    from scraper.scrape_schedule import scrape_schedule
+
+    payload = {
+        "props": {
+            "tournament": {
+                "tournamentkey": "2026-nbl",
+                "id": 1,
+                "tournamentname": "NBL 2026",
+                "startdate": None,
+                "enddate": None,
+            },
+            "games": [
+                {
+                    "id": 1, "homeid": 10, "awayid": 11, "homelabel": "A", "awaylabel": "B",
+                    "homeruns": 5, "awayruns": 3, "innings": 7, "gamestatus": 3,
+                    "gamestatustext": "F", "gametypelabel": "Week 1",
+                    "wbsc_tournament_round_id": 1, "wbsc_tournament_group_id": None,
+                },
+                {
+                    "id": 2, "homeid": 10, "awayid": 11, "homelabel": "A", "awaylabel": "B",
+                    "homeruns": 7, "awayruns": 0, "innings": 0, "gamestatus": 4,
+                    "gamestatustext": "", "gametypelabel": "Week 2",
+                    "wbsc_tournament_round_id": 1, "wbsc_tournament_group_id": None,
+                },
+            ],
+        }
+    }
+    monkeypatch.setattr(
+        "scraper.scrape_schedule.fetch_inertia", lambda *a, **k: payload
+    )
+
+    _, to_fetch = scrape_schedule("nbl", 2026, session)
+
+    assert to_fetch == [1]
+    statuses = {g.source_id: (g.status, g.result_type) for g in session.query(Game).all()}
+    assert statuses == {1: ("final", "played"), 2: ("final", "forfeit")}
 
 
 # --------------------------------------------------------------------------
@@ -462,6 +557,37 @@ def test_division_context_excludes_playoff_and_cross_division_games(session):
     # Only the regular intra-division game counts: 10 PA, 2 hits.
     assert context.games == 1
     assert context.pa == 10
+
+
+def test_forfeit_counts_as_a_result_but_not_as_runs(session):
+    """The reason result_type exists: a forfeit is a real win the
+    federation's own standings count, but 7-0 was never scored, so it must
+    not reach the division's run environment."""
+    ls = _league_season(session)
+    a, b = _team(session, ls, 1, "A"), _team(session, ls, 2, "B")
+    batter = _player_season(session, a, "Batter")
+
+    played = _game(session, ls, a, b, source_id=1, home_score=3, away_score=2)
+    played.result_type = "played"
+    forfeit = _game(session, ls, a, b, source_id=2, home_score=7, away_score=0)
+    forfeit.result_type = "forfeit"
+    _batting_line(session, played, a, batter, pa=10, ab=10, h=3)
+    session.flush()
+
+    apply_divisions(session, ls.id, [DivisionBlock("Only", [1, 2], 0)])
+    compute_division_contexts(session, ls.id)
+    compute_team_strength(session, ls.id)
+
+    context = session.query(DivisionContext).one()
+    # Only the played game's 5 runs, over 1 game.
+    assert context.games == 1
+
+    strength = {
+        s.team_season_id: s for s in session.query(TeamStrength).all()
+    }
+    # But both results count toward the record.
+    assert strength[a.id].wins == 2
+    assert strength[b.id].losses == 2
 
 
 def test_league_season_without_divisions_writes_no_contexts(session):

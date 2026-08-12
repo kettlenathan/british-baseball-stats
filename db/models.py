@@ -268,6 +268,39 @@ class Game(Base):
     home_score: Mapped[int | None] = mapped_column(Integer, nullable=True)
     away_score: Mapped[int | None] = mapped_column(Integer, nullable=True)
     status: Mapped[str] = mapped_column(String)  # scheduled / final / postponed / cancelled
+    # How a final game reached its result. NULL unless status == "final".
+    #
+    #   "played"      — a full game with a scored box score (99.9% carry an
+    #                   inning-by-inning line score and hit totals).
+    #   "forfeit"     — awarded without play, 7-0 or 0-7, no line score.
+    #   "result_only" — genuinely contested and the result recorded, but no
+    #                   scoresheet was ever entered: a real score like 14-8
+    #                   with no innings, no line score and no hits.
+    #
+    # The distinction exists because the two things a game can supply come
+    # apart. A forfeit is a real *result* — the federation's own standings
+    # count it — but contains no baseball, so it must never reach a batting
+    # line, a run environment or a park-neutral rate stat. Filtering only on
+    # status would force a choice between losing 545 real results from the
+    # standings and inventing 7-0 offence in the league averages.
+    #
+    # Counting these was verified against the site's own published standings
+    # rather than assumed: including them takes exact agreement on team
+    # records from 121 of 436 team-seasons to 231, and reproduces the 2026
+    # Division 3 Central table exactly (Milton Keynes 20-0, Oxford 12-10,
+    # Cambridge 10-10), which the played-games-only count gets wrong for four
+    # of its five teams.
+    # Defaulted from status so a Game built without it — tests, ad-hoc
+    # scripts — still describes an ordinary played game rather than falling
+    # out of every "played" filter. The scraper always sets it explicitly.
+    result_type: Mapped[str | None] = mapped_column(
+        String,
+        index=True,
+        nullable=True,
+        default=lambda ctx: (
+            "played" if ctx.get_current_parameters().get("status") == "final" else None
+        ),
+    )
     venue: Mapped[str | None] = mapped_column(String, nullable=True)
 
     # Which division this game counted toward. Non-null only when both teams
@@ -699,6 +732,18 @@ class TeamStrength(Base):
     wins: Mapped[int] = mapped_column(Integer, default=0)
     losses: Mapped[int] = mapped_column(Integer, default=0)
     ties: Mapped[int] = mapped_column(Integer, default=0)
+
+    # Fixtures still to play, from the published schedule. Mid-season these
+    # are what stop a rating being read as a finished verdict: a team 18-0
+    # through 18 of 24 games has not won the division yet, and the app says
+    # so rather than presenting the same number it will present in October.
+    games_remaining: Mapped[int] = mapped_column(Integer, default=0)
+    # Schedule difficulty of those remaining fixtures, on the same scale as
+    # `sos`. This is the half of strength-of-schedule that only exists while
+    # a season is live, and it can diverge sharply from the games already
+    # played — one team may have had the contenders early and the other may
+    # have them all to come.
+    sos_remaining: Mapped[float | None] = mapped_column(Float, nullable=True)
 
     # Fit diagnostics. Both describe the whole league-season rather than this
     # one team, and are denormalised onto each row so a row explains itself —

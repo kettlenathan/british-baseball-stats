@@ -19,16 +19,22 @@ those are the only games the rating is fitted on.
 Results are also split by how lopsided the schedule was, because that is
 where the rating is *supposed* to earn its keep and the aggregate number
 hides it. Measured on the current corpus: the rating beats win percentage by
-0.7% overall, and that splits into no meaningful difference where schedules
-are balanced (within +/-0.002 log loss, i.e. noise) against roughly +0.015
-(3% relative) where they are skewed. That is the honest case for the model —
-not that it predicts better on average, but that it costs nothing where the
+0.7% overall, which splits into +0.003 log loss where schedules are balanced
+against +0.011 (2.2% relative) where they are skewed — roughly a
+three-and-a-half-fold difference. That is the honest case for the model: not
+that it predicts better on average, but that it costs nothing where the
 record is already a fair comparison and corrects it where it is not.
 
-Both also beat the unfitted baselines by a wide margin (0.54 against 0.69),
+Both also beat the unfitted baselines by a wide margin (0.52 against 0.69),
 so the ratings are clearly capturing real signal; the narrow margin is
 against win percentage specifically, because most schedules in this league
 are close enough to balanced that the record is already a decent estimate.
+
+Worth knowing if these numbers are ever compared against an older run: they
+moved when Game.result_type landed. Recovering the 588 forfeit and
+result-only games added 554 scorable games here *and* cut the genuinely
+skewed bucket from 1,210 games to 569, because a good deal of the apparent
+schedule imbalance had been missing results rather than an uneven draw.
 
 Usage:
     uv run python -m scripts.validate_strength

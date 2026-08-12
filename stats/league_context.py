@@ -135,7 +135,15 @@ def _league_pitching_totals(session: Session, league_season_id: int) -> dict[str
 def _league_runs_per_game(session: Session, league_season_id: int) -> float | None:
     row = session.execute(
         select(func.sum(Game.home_score + Game.away_score), func.count())
-        .where(Game.league_season_id == league_season_id, Game.status == "final")
+        .where(
+            Game.league_season_id == league_season_id,
+            Game.status == "final",
+            # Forfeits are recorded 7-0 without a pitch being thrown, and
+            # result-only games have a score but no line score, so neither
+            # describes the run environment even though both are real
+            # results (see Game.result_type).
+            Game.result_type == "played",
+        )
     ).one()
     total_runs, game_count = row
     if not game_count:
@@ -194,6 +202,9 @@ def _division_batting_totals(session: Session, division_id: int) -> dict[str, in
             Game.division_id == division_id,
             Game.status == "final",
             Game.phase == "regular",
+            # See _league_runs_per_game: forfeits and result-only games are
+            # real results but contain no baseball to calibrate against.
+            Game.result_type == "played",
         )
     ).one()
     return {f: (getattr(row, f) or 0) for f in _BATTING_FIELDS}
@@ -208,6 +219,9 @@ def _division_pitching_totals(session: Session, division_id: int) -> dict[str, i
             Game.division_id == division_id,
             Game.status == "final",
             Game.phase == "regular",
+            # See _league_runs_per_game: forfeits and result-only games are
+            # real results but contain no baseball to calibrate against.
+            Game.result_type == "played",
         )
     ).one()
     return {f: (getattr(row, f) or 0) for f in _PITCHING_FIELDS}
@@ -221,6 +235,9 @@ def _division_runs_per_game(session: Session, division_id: int) -> tuple[float |
             Game.division_id == division_id,
             Game.status == "final",
             Game.phase == "regular",
+            # See _league_runs_per_game: forfeits and result-only games are
+            # real results but contain no baseball to calibrate against.
+            Game.result_type == "played",
         )
     ).one()
     if not game_count:

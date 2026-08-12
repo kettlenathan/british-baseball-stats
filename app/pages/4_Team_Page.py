@@ -90,6 +90,21 @@ if division_info:
             help="Against an average opponent from this division, at a neutral venue.",
         )
 
+        left = division_info.get("games_remaining") or 0
+        if left:
+            run_in = division_info.get("sos_remaining")
+            run_in_text = (
+                f" Their remaining opponents rate {run_in:+.2f} against an even draw"
+                f" — {'a harder' if run_in > 0 else 'an easier'} run-in than the season so far."
+                if run_in is not None
+                else ""
+            )
+            st.caption(
+                f"⚠️ **Season in progress** — {left} league fixture"
+                f"{'s' if left != 1 else ''} still to play, so the record and rating above "
+                f"are a snapshot rather than a final standing.{run_in_text}"
+            )
+
 st.subheader("Team stats")
 stats_df = team_season_stats(league_season_id)
 team_stats_row = stats_df[stats_df["team"] == team]

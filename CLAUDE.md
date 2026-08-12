@@ -147,6 +147,24 @@ writes back upstream.
      LeagueSeasonContext, BattingWar, PitchingWar, BatterSpraySeasonStats,
      BatterPitcherMatchup — written only by `stats/`, safe to drop and rebuild at any time
      from fact rows.
+- **A game supplies a result and a box score independently**, and this league separates them
+  constantly, which is what `Game.result_type` records (`"played"` / `"forfeit"` /
+  `"result_only"`, NULL unless `status == "final"`). Reading `gamestatustext.startswith("F")`
+  alone — the original rule — silently discarded **588 games that produced a real competitive
+  result**: 372 forfeits (`gamestatus` 4, blank text, 7-0 or 0-7, zero innings, no line score)
+  and 216 result-only games (`gamestatus` 3, blank text, a real score like 14-8, but zero
+  innings, no line score, no hits — contested, with no scoresheet ever entered). The
+  federation counts both: including them lifts exact agreement with the site's *own published
+  standings* from 121 of 436 team-seasons to 231, and reproduces 2026 Division 3 Central
+  exactly (Milton Keynes 20-0, Oxford 12-10, Cambridge 10-10), which the old rule got wrong
+  for four of its five teams. The discriminator is the **absence of any record of play**
+  (zero innings *and* an empty line score — 99.9% of played finals carry both), not the score
+  pattern, so a genuine 7-0 that went the distance is still `"played"`. Consequences to
+  preserve: records, standings and Bradley-Terry ratings count all three types; **runs,
+  rates, run environments and probable pitchers must filter `result_type == "played"`**, or
+  every forfeit injects a phantom 7-0 into the league averages; and `scrape_schedule` only
+  queues `"played"` games for box-score fetching, since asking for a forfeit's scoresheet
+  spends a rate-limited request to find nothing.
 - **Divisions.** During the regular season teams play *only* within their own regional
   division, so a league table that ranks every team together compares records built against
   disjoint opposition. Across all five leagues in 2026 there were 1,231 regular-season games
@@ -306,10 +324,15 @@ writes back upstream.
   best team in any division automatically looks like it had the easiest schedule, which would
   corrupt the exact comparison this exists for. Core fit is DB-free like `lineup.py`.
   `scripts/validate_strength.py` is the held-out-game harness: the rating beats a win-%
-  baseline by only 0.7% log loss overall, but that is ~0 where schedules are balanced against
-  ~+0.015 (3%) where they are skewed — the honest case is that it costs nothing when the
-  record is already fair and corrects it when it isn't, not that it predicts better on
-  average. Re-run it before changing the model.
+  baseline by only 0.7% log loss overall, but that is +0.003 where schedules are balanced
+  against +0.011 (2.2%) where they are skewed — the honest case is that it costs nothing when
+  the record is already fair and corrects it when it isn't, not that it predicts better on
+  average. Re-run it before changing the model. The fit also reports **`games_remaining` and
+  `sos_remaining`** from the published fixture list: the site posts the whole schedule up
+  front, so mid-season a rating is explicitly a snapshot (2026's leagues sit around 85-90%
+  complete) and the difficulty of the run-in is knowable — in 2026 D3 Central, Oxford Kings
+  face a -1.27 remaining SOS while Cambridge face +0.60. Scheduled fixtures never influence
+  the ratings themselves; only results can.
 - `war.py` — simplified batting/pitching WAR. **It is offense-only / FIP-only: there is no
   defensive component at all.** The box-score play-by-play does carry a coarse batted-ball
   proxy (pull direction, distance, ground/fly/line/pop type — `PlateAppearance`, used for

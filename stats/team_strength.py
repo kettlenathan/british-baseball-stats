@@ -99,6 +99,8 @@ class TeamRating:
     wins: int
     losses: int
     ties: int
+    games_remaining: int = 0
+    sos_remaining: float | None = None
 
 
 @dataclass
@@ -229,6 +231,7 @@ def fit_team_strength(
     games: list[GameResult],
     groups: dict[int, int] | None = None,
     *,
+    remaining: list[tuple[int, int]] | None = None,
     seed: int = 0,
 ) -> StrengthFit:
     """Fit ratings for every team appearing in `games`.
@@ -236,6 +239,12 @@ def fit_team_strength(
     `groups` maps team -> division. Ratings are centred within each group,
     since only within-group comparisons are supported (see the module
     docstring). Teams with no group are centred together as one pool.
+
+    `remaining` is the fixtures still to be played, as (team, opponent)
+    pairs in both directions. It never influences the ratings — only results
+    can do that — but it is what lets a mid-season rating be reported as
+    provisional, with the difficulty of the run-in alongside the difficulty
+    of the games already played.
 
     Home advantage is fitted once across all the games passed in, so callers
     should pass a whole league-season at a time rather than one division:
@@ -269,19 +278,29 @@ def fit_team_strength(
     records = _records(games)
     opponents = _opponents(games)
 
+    upcoming: dict[int, list[int]] = {}
+    for team, opponent in remaining or []:
+        upcoming.setdefault(team, []).append(opponent)
+
     out: dict[int, TeamRating] = {}
     for team in teams:
         variance = covariance[index[team], index[team]]
         wins, losses, ties = records[team]
+        division = by_group[groups.get(team)]
+        left = [o for o in upcoming.get(team, []) if o in ratings]
         out[team] = TeamRating(
             rating=float(ratings[team]),
             rating_se=float(np.sqrt(variance)) if np.isfinite(variance) and variance >= 0 else float("nan"),
-            sos=_strength_of_schedule(team, ratings, opponents[team], by_group[groups.get(team)]),
+            sos=_strength_of_schedule(team, ratings, opponents[team], division),
             expected_win_pct=float(1.0 / (1.0 + np.exp(-ratings[team]))),
             games=wins + losses + ties,
             wins=wins,
             losses=losses,
             ties=ties,
+            games_remaining=len(upcoming.get(team, [])),
+            sos_remaining=(
+                _strength_of_schedule(team, ratings, left, division) if left else None
+            ),
         )
 
     return StrengthFit(out, home_advantage, ridge_lambda, self_calibrated)
@@ -391,7 +410,21 @@ def compute_team_strength(session: Session, league_season_id: int) -> int:
         )
     }
 
-    fit = fit_team_strength(games, groups)
+    # Fixtures still to come. The site publishes the whole season's schedule
+    # up front, so mid-season this is known rather than guessed — which is
+    # what makes "18-0 through 18 of 24" sayable instead of a bare 18-0.
+    # Postponed games are included: they are still owed, just undated.
+    upcoming = session.execute(
+        select(Game.home_team_season_id, Game.away_team_season_id).where(
+            Game.league_season_id == league_season_id,
+            Game.status.in_(("scheduled", "postponed")),
+            Game.phase == "regular",
+            Game.division_id.isnot(None),
+        )
+    ).all()
+    remaining = [(h, a) for h, a in upcoming] + [(a, h) for h, a in upcoming]
+
+    fit = fit_team_strength(games, groups, remaining=remaining)
     for team_season_id, rating in fit.ratings.items():
         upsert(
             session,
@@ -406,6 +439,8 @@ def compute_team_strength(session: Session, league_season_id: int) -> int:
                 "wins": rating.wins,
                 "losses": rating.losses,
                 "ties": rating.ties,
+                "games_remaining": rating.games_remaining,
+                "sos_remaining": rating.sos_remaining,
                 "home_advantage": fit.home_advantage,
                 "ridge_lambda": fit.ridge_lambda,
                 "lambda_self_calibrated": fit.lambda_self_calibrated,

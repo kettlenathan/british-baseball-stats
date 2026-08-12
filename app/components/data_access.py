@@ -219,6 +219,9 @@ def division_environments(league_season_id: int) -> pd.DataFrame:
                 Division.league_season_id == league_season_id,
                 Game.status == "final",
                 Game.phase == "regular",
+                # Forfeits are awarded 7-0 without play; counting them would
+                # invent runs this division never scored.
+                Game.result_type == "played",
             )
             .group_by(Division.id)
         ).all()
@@ -606,6 +609,40 @@ def standings(league_season_id: int, regular_season_only: bool = True) -> pd.Dat
 
 
 @st.cache_data
+def season_progress(league_season_id: int) -> dict:
+    """How far through its published schedule a league-season is.
+
+    The site publishes the whole season's fixtures up front, so "how much is
+    left" is known rather than inferred. Ratings and records are only ever a
+    snapshot of games played, and mid-season that distinction is the
+    difference between "leading the division" and "won the division" —
+    2026's leagues are around 85-90% complete as this is written.
+    """
+    session = get_session()
+    try:
+        played, remaining = session.execute(
+            select(
+                func.sum(case((Game.status == "final", 1), else_=0)),
+                func.sum(case((Game.status.in_(("scheduled", "postponed")), 1), else_=0)),
+            ).where(
+                Game.league_season_id == league_season_id,
+                Game.phase == "regular",
+            )
+        ).one()
+        played, remaining = played or 0, remaining or 0
+        total = played + remaining
+        return {
+            "played": played,
+            "remaining": remaining,
+            "total": total,
+            "pct_complete": (played / total) if total else None,
+            "complete": remaining == 0,
+        }
+    finally:
+        session.close()
+
+
+@st.cache_data
 def team_division(league_season_id: int, team_name: str) -> dict | None:
     """Which division a team played in, and how that division scored.
 
@@ -652,6 +689,8 @@ def team_division(league_season_id: int, team_name: str) -> dict | None:
             "rating_se": strength.rating_se if strength else None,
             "sos": strength.sos if strength else None,
             "expected_win_pct": strength.expected_win_pct if strength else None,
+            "games_remaining": strength.games_remaining if strength else 0,
+            "sos_remaining": strength.sos_remaining if strength else None,
         }
     finally:
         session.close()
@@ -689,10 +728,17 @@ def team_season_stats(league_season_id: int) -> pd.DataFrame:
         games = session.execute(
             select(Game).where(Game.league_season_id == league_season_id, Game.status == "final")
         ).scalars().all()
-        game_totals = {ts_id: {"w": 0, "l": 0, "t": 0, "rs": 0, "ra": 0, "lob_sum": 0, "lob_games": 0} for ts_id, _ in team_seasons}
+        game_totals = {
+            ts_id: {"w": 0, "l": 0, "t": 0, "rs": 0, "ra": 0, "run_games": 0, "lob_sum": 0, "lob_games": 0}
+            for ts_id, _ in team_seasons
+        }
         for g in games:
             if g.home_score is None or g.away_score is None:
                 continue
+            # A forfeit is a real win or loss but not real runs, so the
+            # record counts it and the run totals don't — otherwise every
+            # forfeit would add a phantom 7-0 to runs scored and allowed.
+            counts_runs = g.result_type == "played"
             for ts_id, own, opp, lob in (
                 (g.home_team_season_id, g.home_score, g.away_score, g.home_lob),
                 (g.away_team_season_id, g.away_score, g.home_score, g.away_lob),
@@ -700,8 +746,10 @@ def team_season_stats(league_season_id: int) -> pd.DataFrame:
                 if ts_id not in game_totals:
                     continue
                 gt = game_totals[ts_id]
-                gt["rs"] += own
-                gt["ra"] += opp
+                if counts_runs:
+                    gt["rs"] += own
+                    gt["ra"] += opp
+                    gt["run_games"] += 1
                 if own > opp:
                     gt["w"] += 1
                 elif own < opp:
@@ -756,8 +804,11 @@ def team_season_stats(league_season_id: int) -> pd.DataFrame:
                     "l": gt["l"],
                     "t": gt["t"],
                     "pct": (gt["w"] / gp) if gp else None,
-                    "r_pg": (gt["rs"] / gp) if gp else None,
-                    "ra_pg": (gt["ra"] / gp) if gp else None,
+                    # Per *played* game, not per game in the record: the
+                    # numerator excludes forfeits, so the denominator must
+                    # too or a team with forfeits shows a diluted rate.
+                    "r_pg": (gt["rs"] / gt["run_games"]) if gt["run_games"] else None,
+                    "ra_pg": (gt["ra"] / gt["run_games"]) if gt["run_games"] else None,
                     "lob_pg": (gt["lob_sum"] / gt["lob_games"]) if gt["lob_games"] else None,
                     **bat_rate,
                     "woba": team_woba,
@@ -2149,8 +2200,13 @@ def coverage_summary() -> dict:
             "first_year": first_year,
             "last_year": last_year,
             "divisions": session.execute(select(func.count(League.id))).scalar() or 0,
+            # Games with a scoresheet behind them, which is what "how much
+            # data is here" means to a reader — forfeits are real results
+            # but carry no statistics to explore.
             "games": session.execute(
-                select(func.count(Game.id)).where(Game.status == "final")
+                select(func.count(Game.id)).where(
+                    Game.status == "final", Game.result_type == "played"
+                )
             ).scalar()
             or 0,
             "players": session.execute(select(func.count(Player.id))).scalar() or 0,
