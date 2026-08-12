@@ -2,7 +2,6 @@
 pages. Reuses stats/ formulas rather than recomputing them, so the UI layer
 never duplicates sabermetric logic — it only displays what stats/ derived."""
 
-import math
 from datetime import timedelta
 from types import SimpleNamespace
 
@@ -611,126 +610,90 @@ def standings(league_season_id: int, regular_season_only: bool = True) -> pd.Dat
 
 
 @st.cache_data
-def cross_division_comparison(league_season_id: int) -> pd.DataFrame:
-    """Every team in a league-season on one comparable scale.
+def division_comparison(league_season_id: int) -> pd.DataFrame:
+    """Two independent readings of how easy each division was to bat in,
+    both expressed in wRC+ points so they can be read against each other.
 
-    `rating` is comparable only inside a division; adding the division's
-    `adjustment` puts them all on the same scale. `uncertainty` combines the
-    rating's own error with the division adjustment's, because the second is
-    much the larger of the two and hiding it would make these look far more
-    settled than they are.
+    * `env_gap` — implied by the division's own scoring level. This is
+      exactly what the leaderboards' `wRC+` and `wRC+ vs Div` pair already
+      encodes: the ratio between those two columns *is* this number, so it
+      needs no model and carries no modelling assumptions.
+    * `bridge_gap` — the same question asked of the players who batted in
+      more than one division, which controls for who happened to play where
+      (stats/division_strength.py).
+    * `talent_gap` — the difference. A division can score heavily either
+      because its pitching was weak or because its hitters were strong, and
+      the scoring level alone cannot tell those apart. This column is what
+      separates them: it is the part of a division's scoring attributable to
+      *who played there* rather than to the conditions.
+
+    Deliberately reported as three descriptive columns rather than folded
+    into one adjusted number. The two readings disagree by meaningful
+    amounts, they are biased in different directions, and which to believe
+    depends on judgement this data cannot supply — so the app shows both and
+    says what each is measuring instead of picking for the reader.
     """
     session = get_session()
     try:
-        rows = session.execute(
-            select(
-                TeamSeason.display_name,
-                Division.name,
-                TeamStrength.rating,
-                TeamStrength.rating_se,
-                TeamStrength.wins,
-                TeamStrength.losses,
-                DivisionStrength.adjustment,
-                DivisionStrength.adjustment_se,
-                DivisionStrength.bridge_players,
+        league_woba = session.execute(
+            select(LeagueSeasonContext.lg_woba).where(
+                LeagueSeasonContext.league_season_id == league_season_id
             )
-            .join(TeamStrength, TeamStrength.team_season_id == TeamSeason.id)
-            .join(Division, Division.id == TeamSeason.division_id)
-            .outerjoin(DivisionStrength, DivisionStrength.division_id == Division.id)
-            .where(TeamSeason.league_season_id == league_season_id)
-        ).all()
+        ).scalar_one_or_none()
+        if not league_woba:
+            return pd.DataFrame()
 
-        records = []
-        for name, division, rating, rating_se, wins, losses, adj, adj_se, bridges in rows:
-            if rating is None or adj is None:
-                continue
-            records.append(
-                {
-                    "team": name,
-                    "division": division,
-                    "w": wins,
-                    "l": losses,
-                    "rating": rating,
-                    "adjustment": adj,
-                    "adjusted_rating": rating + adj,
-                    "uncertainty": math.sqrt((rating_se or 0.0) ** 2 + (adj_se or 0.0) ** 2),
-                    "bridge_players": bridges or 0,
-                }
-            )
-        df = pd.DataFrame(records)
-        if df.empty:
-            return df
-        return df.sort_values("adjusted_rating", ascending=False).reset_index(drop=True)
-    finally:
-        session.close()
-
-
-@st.cache_data
-def division_strength_table(league_season_id: int) -> pd.DataFrame:
-    """One row per division with its offset, adjustment and bridge count."""
-    session = get_session()
-    try:
         rows = session.execute(
             select(
                 Division.name,
+                DivisionContext.lg_woba,
+                DivisionContext.pa,
                 DivisionStrength.offset,
                 DivisionStrength.standard_error,
-                DivisionStrength.adjustment,
                 DivisionStrength.bridge_players,
-                DivisionStrength.bridge_pa,
             )
+            .join(DivisionContext, DivisionContext.division_id == Division.id)
             .join(DivisionStrength, DivisionStrength.division_id == Division.id)
             .where(Division.league_season_id == league_season_id)
             .order_by(Division.sort_order)
         ).all()
-        return pd.DataFrame(
-            rows,
-            columns=[
-                "division",
-                "offset",
-                "offset_se",
-                "adjustment",
-                "bridge_players",
-                "bridge_pa",
-            ],
-        )
+
+        usable = [r for r in rows if r[1] is not None and r[3] is not None]
+        if not usable:
+            return pd.DataFrame()
+
+        # Both columns must be measured against the *same* baseline or their
+        # difference is meaningless. env_gap is relative to this
+        # league-season by construction, but DivisionStrength.offset is
+        # centred across all 78 division-seasons in the database, so a league
+        # that is easy overall would show every one of its divisions as
+        # "easier" — which is true globally and useless here. Re-centre the
+        # offsets on this league-season, weighting by plate appearances to
+        # match how lg_woba pools its own divisions.
+        total_pa = sum((r[2] or 0) for r in usable)
+        if total_pa:
+            offset_mean = sum((r[3] * (r[2] or 0)) for r in usable) / total_pa
+        else:
+            offset_mean = sum(r[3] for r in usable) / len(usable)
+
+        records = []
+        for name, division_woba, _pa, offset, offset_se, bridges in usable:
+            env_gap = 100.0 * (division_woba / league_woba) - 100.0
+            bridge_gap = 100.0 * ((offset - offset_mean) / league_woba)
+            records.append(
+                {
+                    "division": name,
+                    "env_gap": env_gap,
+                    "bridge_gap": bridge_gap,
+                    "talent_gap": bridge_gap - env_gap,
+                    "bridge_gap_se": 100.0 * ((offset_se or 0.0) / league_woba),
+                    "bridge_players": bridges or 0,
+                }
+            )
+        return pd.DataFrame(records)
     finally:
         session.close()
 
-
-def head_to_head(df: pd.DataFrame, team_a: str, team_b: str) -> dict | None:
-    """Neutral-venue win probability between two teams, with an interval.
-
-    Pure so it can be tested without a database. The interval is the point of
-    this function: on the current data two good teams from different
-    divisions routinely span "probably wins" to "probably loses", and a bare
-    percentage would read as far more confident than the evidence allows.
-    """
-    if df.empty:
-        return None
-    rows = {r["team"]: r for _, r in df.iterrows()}
-    if team_a not in rows or team_b not in rows:
-        return None
-    a, b = rows[team_a], rows[team_b]
-    diff = a["adjusted_rating"] - b["adjusted_rating"]
-    se = math.sqrt(a["uncertainty"] ** 2 + b["uncertainty"] ** 2)
-
-    def logistic(x: float) -> float:
-        return 1.0 / (1.0 + math.exp(-x))
-
-    return {
-        "team_a": team_a,
-        "team_b": team_b,
-        "same_division": a["division"] == b["division"],
-        "probability": logistic(diff),
-        "low": logistic(diff - 1.96 * se),
-        "high": logistic(diff + 1.96 * se),
-        "difference": diff,
-        "standard_error": se,
-        # Two standard errors is the line between "the data distinguishes
-        # these teams" and "it does not", and the UI must say which.
-        "decisive": abs(diff) > 1.96 * se,
-    }
 
 
 @st.cache_data

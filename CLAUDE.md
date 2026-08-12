@@ -361,11 +361,32 @@ writes back upstream.
   currently shows the offsets beat assuming divisions are equal by 3.7% log loss on 305
   scorable games, with the scale factor landing on the theoretically correct negative sign in
   every fold. **But the margin is only ~2 standard errors** (bootstrap 95% CI [+0.0005,
-  +0.0504]), so individual team comparisons routinely span "probably wins" to "probably
-  loses" — `head_to_head`'s `decisive` flag exists so the UI says which, and the Division
-  Strength page leads with that caveat rather than burying it. The known uncorrected bias is
-  selection: a player who moves between divisions is likelier to be guesting down than a
-  random sample, which inflates the gap.
+  +0.0504]). **How this is surfaced was deliberately scaled back after measurement**, and
+  the reasoning should not be undone casually:
+  - The offsets correlate **0.94 with division `lg_woba` overall, 0.82 within a
+    league-season**. Since the ratio between `wrc_plus` and `wrc_plus_div` *is* that same
+    quantity, the model mostly reproduces what those two columns already show — so the
+    leaderboards' column pair, not this model, is the primary way to read across divisions.
+  - What the model uniquely adds is separating *why* a division scored as it did: `lg_woba`
+    cannot tell weak pitching from strong hitters, and the within-player estimate can. In
+    2026 D3, North scored only +3.2 wRC+ points above the league but shared players found it
+    +12.4 easier — its scoring badly understates how weak the hitting in it was.
+    `data_access.division_comparison` reports both readings plus the difference, rather than
+    folding them into one adjusted number. **It re-centres the offsets on the league-season,
+    PA-weighted, before comparing**: `DivisionStrength.offset` is centred across all 78
+    division-seasons while the scoring gap is relative to one league-season, so without that
+    step an easy league shows every division as "easier" and the difference column is
+    meaningless. `test_both_readings_share_a_baseline` guards it.
+  - **No team-level verdict is published.** An earlier version had `head_to_head` win
+    probabilities and a cross-division team ranking; both were removed because 96% of the
+    variance in such a comparison is team-rating noise from ~22-game seasons rather than
+    anything to do with divisions, and 74% of cross-division team pairs in 2026 D3 cannot be
+    separated at 95% anyway. `test_no_team_level_verdict_is_exposed` asserts the absence so
+    it isn't quietly reintroduced.
+  - The known uncorrected bias is selection: a player who moves between divisions is likelier
+    to be guesting *down* than a random sample, which inflates gaps — the same-player spread
+    is ~1.7x wider than the scoring spread, consistent with exactly that. Hence the UI's
+    "trust the direction more than the size".
 - `war.py` — simplified batting/pitching WAR. **It is offense-only / FIP-only: there is no
   defensive component at all.** The box-score play-by-play does carry a coarse batted-ball
   proxy (pull direction, distance, ground/fly/line/pop type — `PlateAppearance`, used for

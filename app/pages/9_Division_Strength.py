@@ -5,96 +5,46 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
 
 import streamlit as st
 
-from app.components.data_access import (
-    cross_division_comparison,
-    division_strength_table,
-    head_to_head,
-)
+from app.components.data_access import division_comparison, division_environments
 from app.components.filters import league_season_selector
-from app.components.formatting import column_config_for
+from app.components.formatting import PCT_COLUMN_CONFIG, column_config_for
 
 st.set_page_config(page_title="Division Strength", page_icon="⚖️", layout="wide")
 st.title("Division Strength")
 st.caption(
-    "Teams only play inside their own division, so their records were built against "
-    "different opposition. This page estimates how those divisions compare — and is "
-    "honest about how uncertain that estimate is."
+    "Teams play only inside their own division, so their records were built against "
+    "different opposition. This page asks how those divisions compared — and shows the two "
+    "ways of answering that, because they disagree."
 )
 
 league_season_id = league_season_selector()
 if league_season_id is None:
     st.stop()
 
-comparison = cross_division_comparison(league_season_id)
+comparison = division_comparison(league_season_id)
 if comparison.empty:
     st.info(
-        "No cross-division estimate is available for this league-season — it either has "
-        "only one division, or too few players who appeared in more than one."
+        "No division comparison is available for this league-season — it either has only "
+        "one division, or too few players who appeared in more than one."
     )
     st.stop()
 
-st.warning(
-    "**These are the least certain numbers on the site.** Nothing in the regular season "
-    "links one division to another, so this rests entirely on players who turned out in "
-    "more than one. Tested against 305 games that did cross divisions, it predicts better "
-    "than assuming the divisions are equal — but only by about two standard errors, and "
-    "most individual team comparisons below are genuinely too close to call."
+st.markdown(
+    "The most direct way to compare players across divisions is on the **Leaderboards** "
+    "page, which shows every hitter's `wRC+` (against the whole competition) beside their "
+    "`wRC+ vs Div` (against their own division). That pair needs no model at all, and it is "
+    "the recommended way to read across divisions."
+)
+st.markdown(
+    "What that pair *cannot* tell you is **why** a division scored the way it did. A "
+    "division looks high-scoring whether its pitching was weak or its hitters were strong. "
+    "This page separates those two explanations."
 )
 
-st.subheader("Who is actually stronger?")
+st.subheader("How easy was each division to bat in?")
 st.markdown(
-    "Pick any two teams, including ones that never played each other, for a "
-    "neutral-venue estimate."
-)
-
-teams = list(comparison["team"])
-col_a, col_b = st.columns(2)
-team_a = col_a.selectbox("Team", teams, index=0, key="team_a")
-team_b = col_b.selectbox("Opponent", teams, index=min(1, len(teams) - 1), key="team_b")
-
-if team_a == team_b:
-    st.info("Pick two different teams.")
-else:
-    result = head_to_head(comparison, team_a, team_b)
-    favourite = team_a if result["probability"] >= 0.5 else team_b
-    probability = max(result["probability"], 1 - result["probability"])
-    low, high = sorted((result["low"], result["high"]))
-    if favourite == team_b:
-        low, high = 1 - high, 1 - low
-
-    st.metric(
-        f"{favourite} to win, at a neutral venue",
-        f"{probability:.0%}",
-        help="Bradley-Terry ratings plus the division adjustment, on a common scale.",
-    )
-    st.caption(f"95% interval: **{low:.0%} to {high:.0%}**")
-
-    if result["same_division"]:
-        st.success(
-            "These two are in the same division and have played each other, so this "
-            "comparison rests on real head-to-head evidence rather than the division "
-            "adjustment."
-        )
-    elif result["decisive"]:
-        st.info(
-            f"The gap is wider than the uncertainty, so **{favourite} are the stronger "
-            "side** on this evidence — though they never met."
-        )
-    else:
-        st.warning(
-            "**Too close to call.** The interval spans both sides of an even contest, so "
-            "the honest answer is that this data cannot separate these two teams. That is "
-            "a real finding, not a missing number — they never played, and the players "
-            "linking their divisions are too few to settle it."
-        )
-
-st.divider()
-
-st.subheader("All teams on one scale")
-st.markdown(
-    "`Rating` is comparable only within a division. `Adjustment` is what this page adds "
-    "for the division's standard, and `Adjusted rating` puts every team on a common "
-    "scale. `Uncertainty` is one standard error — compare gaps against roughly twice it."
+    "Both columns are in wRC+ points, relative to this league-season as a whole. "
+    "Positive means easier."
 )
 st.dataframe(
     comparison,
@@ -102,49 +52,82 @@ st.dataframe(
     use_container_width=True,
     column_config=column_config_for(comparison),
 )
+st.markdown(
+    "- **Scoring gap** — implied by the division's own scoring level. This is what the two "
+    "wRC+ columns on the Leaderboards already encode.\n"
+    "- **Same-player gap** — the same question asked of players who batted in more than one "
+    "division, which controls for who happened to play where.\n"
+    "- **Down to who played** — the difference between them. A large positive value means the "
+    "division scored more heavily than its conditions alone explain, i.e. it held the "
+    "stronger hitters; a large negative value means it was tougher than its scoring suggests."
+)
+
+st.info(
+    "**Where the two disagree, trust the direction more than the size.** The same-player "
+    "gaps are systematically wider than the scoring gaps, which is what you would expect "
+    "from the one bias that cannot be corrected here: a player turning out in a second "
+    "division is more often guesting *down* a level than moving up, and a stronger player "
+    "visiting a weaker division exaggerates the difference between them."
+)
+
+with st.expander("Worked example — 2026 Division 3"):
+    st.markdown(
+        "Milton Keynes Bucks went 20-0 in Central while London Meteors went 19-5 in South, "
+        "and the two never played."
+    )
+    st.markdown(
+        "Both readings agree that Central was the easier of the two. By scoring level it sat "
+        "about 8 wRC+ points above the league and South about 3 below; by players who batted "
+        "in both, Central was about 7 above and South about 7 below. Whichever measure you "
+        "take, Central was somewhere around 11 to 14 wRC+ points the softer division, so the "
+        "Bucks' unbeaten record deserves a real discount against the Meteors' 19-5."
+    )
+    st.markdown(
+        "The two readings disagree more elsewhere in the same league. North scored only "
+        "slightly above the league but shared players found it much the easiest division of "
+        "the four — meaning its scoring understates how weak the *hitting* in it was."
+    )
+    st.markdown(
+        "What this page will **not** do is turn any of that into a probability that one club "
+        "beats another. With around 22 games each, a team's own strength is the far larger "
+        "unknown — it accounts for roughly 96% of the uncertainty in such a comparison — and "
+        "about three quarters of cross-division pairings in this league-season cannot be "
+        "separated at all. A single percentage would imply a precision that does not exist."
+    )
 
 st.divider()
 
-st.subheader("How the divisions compare")
-offsets = division_strength_table(league_season_id)
-if offsets.empty:
-    st.info("No division offsets available for this league-season.")
-else:
+st.subheader("Run environments")
+env = division_environments(league_season_id)
+if not env.empty:
     st.dataframe(
-        offsets,
-        hide_index=True,
-        use_container_width=True,
-        column_config=column_config_for(offsets),
+        env, hide_index=True, use_container_width=True, column_config=PCT_COLUMN_CONFIG
     )
     st.caption(
-        "`Offset` is in wOBA points and measures how much **easier to bat in** a division "
-        "was, so a positive number implies weaker pitching. `Adjustment` converts that to "
-        "the rating scale. `Bridges` counts the players who appeared in this division and "
-        "at least one other — every estimate here rests on them, and a division with few "
-        "of them deserves proportionately less trust."
+        "Raw scoring by division, the input behind the scoring gap above. Regular-season "
+        "intra-division games only; forfeits are excluded, since no runs were scored in them."
     )
 
-with st.expander("How this is worked out, and why to be cautious"):
+with st.expander("How the same-player comparison works, and what it cannot do"):
     st.markdown(
         "Divisions play no regular-season games against each other, so their relative "
-        "standard has to come from somewhere else. It comes from **players who appeared "
-        "in more than one division**: when the same person bats in two, the difference in "
-        "what they produce is evidence about the difference between those divisions. This "
-        "is the reasoning behind Major League Equivalencies, applied to a league that needs "
-        "it because its divisions never meet."
+        "standard has to come from somewhere other than results. It comes from **players who "
+        "appeared in more than one division**: when the same person bats in two, the "
+        "difference in what they produce is evidence about the difference between them. "
+        "Across the seasons here, 1,221 pairs of divisions share at least one such player, "
+        "enough to link every division into a single connected network."
     )
     st.markdown(
-        "The estimate uses only *within-player* variation — a player who appeared in one "
-        "division contributes nothing, and cannot make their division look strong merely "
-        "by being good. Converting \"easier to bat in\" into \"wins games\" needs one more "
-        "number, which is fitted against the games in the archive that did cross divisions."
+        "The estimate uses only *within-player* differences. A player who appeared in one "
+        "division contributes nothing at all and cannot make their division look easy simply "
+        "by being a good hitter — which is precisely the contamination that the scoring-level "
+        "measure suffers from, and the reason both are shown."
     )
     st.markdown(
-        "**Two reasons to treat all of this as provisional.** First, players who move "
-        "between divisions are not a random sample — someone guesting down a level is "
-        "likely stronger than the division they visit, which inflates the apparent gap. "
-        "Nothing here corrects for that. Second, the whole construction was tested on only "
-        "305 cross-division games, and while it beat assuming divisions are equal, it did "
-        "so by a margin that is itself close to the noise."
+        "**Two limits worth stating plainly.** The selection bias above is real, uncorrected, "
+        "and pushes the same-player gaps outward. And while this construction does beat "
+        "assuming the divisions are equal when tested against 305 games that genuinely did "
+        "cross divisions, it does so by a margin only about twice its own standard error. "
+        "These are the least certain numbers on the site."
     )
     st.markdown("See the Methodology page for the full description.")

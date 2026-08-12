@@ -169,11 +169,21 @@ st.markdown(
     "which inflates the apparent gap in a way nothing here corrects for."
 )
 st.markdown(
-    "So the page reports an interval, and says plainly when two teams cannot be separated. "
-    "Milton Keynes Bucks' 20-0 in 2026 Division 3 Central against London Meteors' 19-5 in "
-    "Division 3 South comes out at roughly 59% to the Bucks — with an interval running from "
-    "21% to 89%. The honest answer to that particular question is still **too close to "
-    "call**, and that is a finding about the evidence rather than a gap in it."
+    "**What it is used for, and what it deliberately is not.** The same-player comparison "
+    "agrees closely with the simple scoring-level comparison — the two correlate at about "
+    "0.82 within a league-season — so it is not shown as a better answer to the same "
+    "question. It is shown because it answers a *different* one: a division scores heavily "
+    "either because its pitching was weak or because its hitters were strong, and only the "
+    "same-player reading can separate those. The Division Strength page therefore reports "
+    "both readings and the difference between them, rather than a single adjusted number."
+)
+st.markdown(
+    "It stops there deliberately. This site does **not** publish a probability that a team "
+    "from one division would beat a team from another. With roughly 22 games per season, "
+    "the uncertainty in a club's own strength is far larger than the uncertainty about its "
+    "division — it accounts for about 96% of the variance in such a comparison — and around "
+    "three quarters of cross-division pairings cannot be separated at all. A percentage "
+    "would imply a precision the data does not have, however carefully it were captioned."
 )
 
 st.divider()

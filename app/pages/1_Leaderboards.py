@@ -49,7 +49,9 @@ _BASELINE_CAPTION = (
     "inside their division, so the first measures them against opponents they never "
     "faced, while the second measures them against a bar that may itself be low. "
     "A big gap between the two means the division's run environment is unusual, not "
-    "that the player is over- or under-rated."
+    "that the player is over- or under-rated. Reading both together is the most reliable "
+    "way to compare players across divisions; the Division Strength page shows how far "
+    "apart the divisions were."
 )
 _BASELINE_CAPTION_PITCHING = _BASELINE_CAPTION.replace("wRC+", "ERA+").replace(
     "a hitter", "a pitcher"

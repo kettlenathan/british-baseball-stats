@@ -2,10 +2,19 @@
 
 import math
 
-from app.components.data_access import head_to_head
-from stats.division_strength import Stint, fit_division_offsets
+import pytest
 
-import pandas as pd
+from app.components import data_access
+from db.models import (
+    Division,
+    DivisionContext,
+    DivisionStrength,
+    League,
+    LeagueSeason,
+    LeagueSeasonContext,
+    Season,
+)
+from stats.division_strength import Stint, fit_division_offsets
 
 
 def _stints(spec):
@@ -111,58 +120,135 @@ def test_no_stints_is_handled():
 
 
 # --------------------------------------------------------------------------
-# Head-to-head presentation
+# Presentation: the two readings shown side by side
 # --------------------------------------------------------------------------
 
 
-def _comparison(rows):
-    return pd.DataFrame(
-        [
-            {
-                "team": t,
-                "division": d,
-                "adjusted_rating": r,
-                "uncertainty": u,
-                "w": 0,
-                "l": 0,
-                "rating": r,
-                "adjustment": 0.0,
-                "bridge_players": 10,
-            }
-            for t, d, r, u in rows
-        ]
+@pytest.fixture(autouse=True)
+def _patch_get_session(session, monkeypatch):
+    monkeypatch.setattr(data_access, "get_session", lambda: session)
+    monkeypatch.setattr(session, "close", lambda: None)
+    yield
+    data_access.division_comparison.clear()
+
+
+def _league_with_divisions(session, league_woba, divisions):
+    """divisions: {name: (division lgwOBA, bridge offset)}."""
+    league = League(code="d3", name="Division 3", tier="senior", is_senior=True)
+    season = Season(year=2026)
+    session.add_all([league, season])
+    session.flush()
+    ls = LeagueSeason(
+        league_id=league.id, season_id=season.id, source_tournament_id=1,
+        competition_slug="2026-d3",
+    )
+    session.add(ls)
+    session.flush()
+    session.add(LeagueSeasonContext(league_season_id=ls.id, lg_woba=league_woba))
+    for order, (name, (division_woba, offset)) in enumerate(divisions.items()):
+        division = Division(league_season_id=ls.id, name=name, sort_order=order)
+        session.add(division)
+        session.flush()
+        session.add(DivisionContext(division_id=division.id, lg_woba=division_woba))
+        session.add(
+            DivisionStrength(
+                division_id=division.id, offset=offset, standard_error=0.01,
+                bridge_players=40,
+            )
+        )
+    session.flush()
+    return ls
+
+
+def test_scoring_gap_reproduces_the_wrc_plus_ratio(session):
+    """The scoring gap must be exactly what the leaderboards' two wRC+
+    columns already imply — it is the same quantity, not a second estimate."""
+    ls = _league_with_divisions(session, 0.400, {"Easy": (0.440, 0.02)})
+
+    row = data_access.division_comparison(ls.id).iloc[0]
+
+    # 0.440 / 0.400 = 110% of league, i.e. +10 wRC+ points.
+    assert row["env_gap"] == pytest.approx(10.0)
+
+
+def test_talent_gap_separates_scoring_from_who_played(session):
+    """The column that justifies this page existing: a division can score
+    heavily because conditions were soft or because its hitters were good,
+    and only the same-player reading can tell those apart."""
+    ls = _league_with_divisions(
+        session,
+        0.400,
+        {
+            # Scores well above league, but shared players found it only
+            # slightly easier -> the scoring was down to who played there.
+            "Stacked": (0.440, 0.008),
+            # Scores at league level, but shared players found it hard ->
+            # tougher than its scoring suggests.
+            "Tough": (0.400, -0.020),
+        },
     )
 
+    df = data_access.division_comparison(ls.id).set_index("division")
 
-def test_head_to_head_favours_the_higher_adjusted_rating():
-    df = _comparison([("Strong", "A", 1.5, 0.2), ("Weak", "B", -0.5, 0.2)])
-
-    result = head_to_head(df, "Strong", "Weak")
-
-    assert result["probability"] > 0.5
-    assert result["decisive"] is True
-    assert result["same_division"] is False
+    assert df.loc["Stacked", "env_gap"] > df.loc["Stacked", "bridge_gap"]
+    assert df.loc["Stacked", "talent_gap"] < 0
+    assert df.loc["Tough", "env_gap"] == pytest.approx(0.0)
+    assert df.loc["Tough", "bridge_gap"] < 0
+    assert df.loc["Tough", "talent_gap"] < 0
 
 
-def test_head_to_head_reports_a_close_call_as_undecided():
-    """The case that matters most: two good teams from different divisions
-    whose gap is inside the uncertainty must not be ranked confidently."""
-    df = _comparison([("MK", "Central", 1.81, 0.69), ("Meteors", "South", 1.46, 0.53)])
+def test_both_readings_share_a_baseline(session):
+    """Regression: DivisionStrength.offset is centred across every division
+    in the database, while env_gap is relative to this league-season. Left
+    uncorrected, a league that is easy overall shows *every* one of its
+    divisions as easier, and `talent_gap` becomes meaningless — which is
+    exactly what happened before the offsets were re-centred per
+    league-season."""
+    ls = _league_with_divisions(
+        session,
+        0.400,
+        # All three offsets sit far above the global average, as every
+        # division of an easy league would.
+        {"A": (0.410, 0.100), "B": (0.400, 0.090), "C": (0.390, 0.080)},
+    )
 
-    result = head_to_head(df, "MK", "Meteors")
+    df = data_access.division_comparison(ls.id)
 
-    assert result["decisive"] is False
-    assert result["low"] < 0.5 < result["high"]
-
-
-def test_head_to_head_flags_same_division_pairs():
-    df = _comparison([("A", "North", 1.0, 0.3), ("B", "North", 0.0, 0.3)])
-
-    assert head_to_head(df, "A", "B")["same_division"] is True
+    # Both columns must straddle zero within the league-season.
+    assert df["bridge_gap"].min() < 0 < df["bridge_gap"].max()
+    assert abs(df["bridge_gap"].mean()) < 1.0
+    # And the ordering must survive the re-centring.
+    assert list(df.sort_values("bridge_gap", ascending=False)["division"]) == ["A", "B", "C"]
 
 
-def test_head_to_head_returns_none_for_unknown_teams():
-    df = _comparison([("A", "North", 1.0, 0.3)])
+def test_division_comparison_keeps_published_order(session):
+    ls = _league_with_divisions(
+        session, 0.400, {"North": (0.410, 0.01), "South": (0.390, -0.01)}
+    )
 
-    assert head_to_head(df, "A", "Nobody") is None
-    assert head_to_head(pd.DataFrame(), "A", "B") is None
+    assert list(data_access.division_comparison(ls.id)["division"]) == ["North", "South"]
+
+
+def test_division_comparison_is_empty_without_a_league_context(session):
+    league = League(code="d3", name="Division 3", tier="senior", is_senior=True)
+    season = Season(year=2026)
+    session.add_all([league, season])
+    session.flush()
+    ls = LeagueSeason(
+        league_id=league.id, season_id=season.id, source_tournament_id=1,
+        competition_slug="2026-d3",
+    )
+    session.add(ls)
+    session.flush()
+
+    assert data_access.division_comparison(ls.id).empty
+
+
+def test_no_team_level_verdict_is_exposed():
+    """Deliberate absence, asserted so it isn't quietly reintroduced: the app
+    stops short of ranking teams across divisions or emitting a win
+    probability, because team-rating noise from ~22-game seasons dominates
+    such a comparison and three quarters of cross-division pairs cannot be
+    separated at all."""
+    assert not hasattr(data_access, "head_to_head")
+    assert not hasattr(data_access, "cross_division_comparison")

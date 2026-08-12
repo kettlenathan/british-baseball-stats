@@ -90,9 +90,13 @@ STAT_LABELS = {
     # against a division-average opponent and is comparable only within a
     # division; "SOS" is schedule difficulty against a balanced-draw baseline.
     "rating": "Rating", "sos": "SOS", "rating_se": "Rating ±",
-    "adjustment": "Adjustment", "adjusted_rating": "Adjusted Rating",
-    "uncertainty": "Uncertainty", "offset": "Offset", "offset_se": "Offset ±",
-    "bridge_players": "Bridges", "bridge_pa": "Bridge PA",
+    # Division comparison (app/pages/9_Division_Strength.py). Labelled by what
+    # each measures rather than by its mechanism: a reader needs to know one
+    # column comes from scoring and the other from shared players.
+    "env_gap": "Scoring Gap", "bridge_gap": "Same-Player Gap",
+    "talent_gap": "Down to Who Played", "bridge_gap_se": "Same-Player ±",
+    "bridge_players": "Bridge Players", "bridge_pa": "Bridge PA",
+    "offset": "Offset", "offset_se": "Offset ±",
     "expected_win_pct": "xWin%",
     "opponent": "Opponent", "position": "Position", "jersey_number": "No.",
     "po": "PO", "a": "A", "e": "E", "dp": "DP", "fpct": "FPCT",
@@ -125,7 +129,7 @@ STAT_FORMAT = {
     "era_plus": ".0f", "ip": ".1f", "pct": ".3f", "year": ".0f",
     "wrc_plus_div": ".0f", "era_plus_div": ".0f",
     "rating": "+.2f", "sos": "+.2f", "rating_se": ".2f", "expected_win_pct": ".1%",
-    "adjustment": "+.2f", "adjusted_rating": "+.2f", "uncertainty": ".2f",
+    "env_gap": "+.1f", "bridge_gap": "+.1f", "talent_gap": "+.1f", "bridge_gap_se": ".1f",
     "offset": "+.3f", "offset_se": ".3f", "bridge_players": ",.0f", "bridge_pa": ",.0f",
     "r_per_team_game": ".2f", "lg_woba": ".3f", "lg_era": ".2f",
     "games": ",.0f", "teams": ",.0f", "divisions": ",.0f",
