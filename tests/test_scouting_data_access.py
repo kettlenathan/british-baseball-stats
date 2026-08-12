@@ -95,14 +95,28 @@ def _fixture(session):
     )
     session.add_all(
         [
-            BattingTrueTalent(player_season_id=their_slugger.id, pa=40, observed_woba=0.55, shrunk_woba=0.45),
-            BattingTrueTalent(player_season_id=their_scrub.id, pa=30, observed_woba=0.15, shrunk_woba=0.28),
-            BattingTrueTalent(player_season_id=our_batter.id, pa=35, observed_woba=0.40, shrunk_woba=0.38),
-            # Enzo's shrunk estimate lands *above* the vet's despite the
-            # 0-for-7, purely because 7 PA barely moves him off the league
-            # mean — exactly the trap the conservative ranking must avoid.
-            BattingTrueTalent(player_season_id=enzo.id, pa=7, observed_woba=0.0, shrunk_woba=0.32),
-            BattingTrueTalent(player_season_id=bench_vet.id, pa=60, observed_woba=0.28, shrunk_woba=0.30),
+            # These stand in for what stats/shrinkage.py writes. prior_woba is
+            # the playing-time-aware prior each hitter was shrunk toward, so
+            # it sits below lg_woba (.340) for the lightly used and above it
+            # for regulars; shrunk_woba_sd is the posterior SD the scouting
+            # report ranks on. See test_shrinkage.py for the tests that the
+            # real pipeline actually produces this shape.
+            BattingTrueTalent(player_season_id=their_slugger.id, pa=40, observed_woba=0.55,
+                              prior_woba=0.340, shrunk_woba=0.45, shrunk_woba_sd=0.039),
+            BattingTrueTalent(player_season_id=their_scrub.id, pa=30, observed_woba=0.15,
+                              prior_woba=0.334, shrunk_woba=0.28, shrunk_woba_sd=0.041),
+            BattingTrueTalent(player_season_id=our_batter.id, pa=35, observed_woba=0.40,
+                              prior_woba=0.337, shrunk_woba=0.38, shrunk_woba_sd=0.040),
+            # Enzo's 0-for-7 no longer lands near the league mean: his prior
+            # is .315, not .340, because hitters with this little playing
+            # time are measurably below average in this league. That is what
+            # keeps him behind the vet — the ranking penalty is no longer
+            # doing that job alone.
+            BattingTrueTalent(player_season_id=enzo.id, pa=7, observed_woba=0.0,
+                              prior_woba=0.315, shrunk_woba=0.298, shrunk_woba_sd=0.044,
+                              prior_ln_pa_slope=0.021, prior_center_log_pa=3.663),
+            BattingTrueTalent(player_season_id=bench_vet.id, pa=60, observed_woba=0.28,
+                              prior_woba=0.349, shrunk_woba=0.326, shrunk_woba_sd=0.037),
         ]
     )
     session.add(
@@ -271,7 +285,10 @@ def test_lineup_recommendation_benches_beyond_nine(session):
     # Nobody on this bench has a single PA — the report must refuse to name
     # a "best bat off the bench" rather than crown the least-known player.
     assert not any("First bat" in role for role in bench["role"])
-    assert all("Too few PA" in role for role in bench["role"])
+    # But it must still say what it expects of them: no claim is not the same
+    # as no information (see stats/lineup.py:evidence_label).
+    assert all("No PA yet" in role for role in bench["role"])
+    assert all("projects" in role for role in bench["role"])
 
 
 def _add_us_star(session, ls, source_id, name):
@@ -310,7 +327,45 @@ def test_bench_role_requires_evidence_not_just_shrunk_estimate(session):
     by_player = {r["player"]: r for _, r in bench.iterrows()}
     # The vet has 60 PA of evidence: they get the pinch-hit call(s).
     assert "First bat off the bench" in by_player["Bench Vet"]["role"]
-    # Enzo (7 PA) is flagged as unjudgeable, never recommended.
-    assert by_player["Enzo"]["role"] == "Too few PA to judge (7)"
+    # Enzo (7 PA) is never *recommended* — but his role cell now reports the
+    # projection and its width instead of the old "Too few PA to judge (7)",
+    # which implied we had no view of him at all.
+    assert "First bat" not in by_player["Enzo"]["role"]
+    assert by_player["Enzo"]["role"].startswith("7 PA so far — projects ")
     # And the sample-penalized ranking lists the vet ahead of Enzo.
     assert list(bench["player"]).index("Bench Vet") < list(bench["player"]).index("Enzo")
+
+
+def test_hitter_with_no_season_row_is_not_projected_as_league_average(session):
+    """A rostered player the shrinkage layer has no row for must be projected
+    from the playing-time curve, not parked at the league mean.
+
+    Without this they land *above* a hitter with four PA of evidence, which
+    is backwards, and reinstates exactly the assumption the playing-time
+    prior exists to remove. Only an end-to-end check catches it: every layer
+    in isolation looks fine, and the league mean is a perfectly plausible
+    default until you notice who it out-ranks."""
+    ls = _fixture(session)
+    us_ts = session.execute(
+        select(TeamSeason).where(TeamSeason.league_season_id == ls.id, TeamSeason.display_name == "Us")
+    ).scalar_one()
+    ghost = Player(source_id=200, full_name="Never Batted")
+    session.add(ghost)
+    session.flush()
+    session.add(PlayerSeason(player_id=ghost.id, team_season_id=us_ts.id))
+    session.commit()
+
+    out = data_access.lineup_recommendation(
+        ls.id, "Us", ["Our Batter", "Enzo", "Bench Vet", "Never Batted"], vs_throws=None
+    )
+    profiles = {r["player"]: r for _, r in out["profiles"].iterrows()}
+    ghost_target = profiles["Never Batted"]["target_woba"]
+
+    # Below the league mean (.340 in this fixture), not at it.
+    assert ghost_target < 0.340 - 0.02
+    # And below a hitter with 60 PA of real, if unspectacular, evidence.
+    assert ghost_target < profiles["Bench Vet"]["target_woba"]
+    # But NOT below Enzo, who is worse for a reason the ghost isn't: 0-for-7
+    # is negative evidence, and the two share the same prior. "No data" and
+    # "seen and bad" should not collapse into the same projection.
+    assert ghost_target > profiles["Enzo"]["target_woba"]

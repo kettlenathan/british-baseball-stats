@@ -832,12 +832,31 @@ class PitchingWar(Base):
 
 
 class BattingTrueTalent(Base):
-    """Empirical-Bayes shrinkage of season wOBA toward the league-season
-    mean, weighted by PA against a stabilization point self-calibrated from
+    """Empirical-Bayes shrinkage of season wOBA toward a playing-time-aware
+    prior, weighted by PA against a stabilization point self-calibrated from
     this league-season's own player-to-player variance (see
     stats/shrinkage.py) — falls back to a published stabilization-point
     constant when the league-season's own data can't support the estimate
-    (k_self_calibrated distinguishes which path was used)."""
+    (k_self_calibrated distinguishes which path was used).
+
+    `prior_woba` is what this hitter was shrunk *toward*, and is deliberately
+    not the flat league mean: playing time here is strongly
+    performance-selected, so a 6-PA hitter's prior sits well below a
+    regular's (see the module docstring for the measurements). It is NULL,
+    equal to the flat league mean, when the league-season couldn't support
+    the fit. `prior_ln_pa_slope` and `prior_center_log_pa` record the fitted,
+    damped curve for that league-season — slope NULL where the corpus-wide
+    fallback was used, the same "which path did this row take" role
+    `k_self_calibrated` plays for the stabilization point. They are stored on
+    every row (rather than on a league-season table) so the curve can be
+    reconstructed and evaluated at *any* PA from any single row — which is
+    what lets a consumer project a hitter who has no row here at all, e.g. a
+    rostered player who hasn't batted. Without both numbers the curve isn't
+    recoverable and such a player silently reverts to the league mean.
+
+    `shrunk_woba_sd` is the posterior SD of `shrunk_woba`, so consumers can
+    rank on a lower confidence bound or show an interval rather than inventing
+    their own small-sample penalty."""
 
     __tablename__ = "batting_true_talent"
 
@@ -847,10 +866,14 @@ class BattingTrueTalent(Base):
     )
     pa: Mapped[int] = mapped_column(Integer, default=0)
     observed_woba: Mapped[float | None] = mapped_column(Float, nullable=True)
+    prior_woba: Mapped[float | None] = mapped_column(Float, nullable=True)
     shrunk_woba: Mapped[float | None] = mapped_column(Float, nullable=True)
+    shrunk_woba_sd: Mapped[float | None] = mapped_column(Float, nullable=True)
     reliability: Mapped[float | None] = mapped_column(Float, nullable=True)
     stabilization_pa: Mapped[float | None] = mapped_column(Float, nullable=True)
     k_self_calibrated: Mapped[bool] = mapped_column(Boolean, default=False)
+    prior_ln_pa_slope: Mapped[float | None] = mapped_column(Float, nullable=True)
+    prior_center_log_pa: Mapped[float | None] = mapped_column(Float, nullable=True)
     computed_at: Mapped[dt.datetime] = mapped_column(DateTime, default=_now)
 
 

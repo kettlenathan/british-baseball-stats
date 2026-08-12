@@ -347,8 +347,8 @@ def _hitters_section(data: dict) -> list:
         return story
     story.append(
         Paragraph(
-            "Ranked by true-talent wOBA (observed wOBA shrunk toward the league average by sample size) — "
-            "the fairest ordering at amateur-season sample sizes.",
+            "Ranked by true-talent wOBA (observed wOBA regressed by sample size toward what hitters with "
+            "that much playing time actually hit) — the fairest ordering at amateur-season sample sizes.",
             _SMALL,
         )
     )
@@ -575,8 +575,12 @@ def _lineup_section(data: dict) -> list:
 
 def _methodology_section() -> list:
     notes = [
-        "Rankings use true-talent (empirical-Bayes shrunk) wOBA/FIP, so small samples are pulled toward "
-        "league average rather than taken at face value.",
+        "Rankings use true-talent (empirical-Bayes shrunk) wOBA/FIP, so small samples are regressed rather "
+        "than taken at face value. Lightly-used hitters are regressed toward what lightly-used hitters in "
+        "this league actually hit, which is below average — not toward the league average itself.",
+        "A hitter with under 20 PA is projected and ranked like anyone else, but no claim is made about "
+        "them: their line shows the projection and its likely range instead of quoting rate stats that "
+        "a handful of plate appearances can't support.",
         "Spray charts approximate location from the site's directional pull value and hit distance — no true "
         "batted-ball coordinates exist for this league. The fan is fixed 90-degree fair territory.",
         "Probable pitchers are inferred from usage history (recency-weighted starts). The league publishes "

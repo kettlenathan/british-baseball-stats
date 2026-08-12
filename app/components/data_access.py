@@ -45,6 +45,7 @@ from stats.lineup import (
     MIN_PA_FOR_JUDGEMENT,
     build_profile,
     conservative_woba,
+    evidence_label,
     league_component_rates,
     optimize_lineup,
     platoon_adjusted_woba,
@@ -52,6 +53,7 @@ from stats.lineup import (
     slot_rationales,
 )
 from stats.probable_pitchers import probable_starters, staff_usage
+from stats.shrinkage import FALLBACK_PLAYING_TIME_PRIOR, PlayingTimePrior
 from stats.rate_stats import (
     avg,
     avg_risp,
@@ -1920,6 +1922,14 @@ def scouting_hitters(league_season_id: int, team_name: str) -> pd.DataFrame:
                     **batting_rate_stats(stats_row),
                     "woba": observed,
                     "shrunk_woba": talent.shrunk_woba if talent else None,
+                    # Carried so the lineup optimizer can rank on a lower
+                    # confidence bound and quote a range, rather than
+                    # inventing its own small-sample penalty. prior_woba is
+                    # what they were shrunk toward — for a lightly-used
+                    # hitter that is well below the league mean, which is the
+                    # whole point and worth being able to see.
+                    "shrunk_woba_sd": talent.shrunk_woba_sd if talent else None,
+                    "prior_woba": talent.prior_woba if talent else None,
                     "wrc_plus": wrc_plus(observed, lg_woba),
                     "tendency": spray.tendency_label if spray else None,
                 }
@@ -2121,6 +2131,40 @@ def league_batting_component_totals(league_season_id: int) -> dict:
 
 
 @st.cache_data
+def league_playing_time_prior(league_season_id: int) -> tuple[float, float] | None:
+    """(slope, center_log_pa) of the playing-time prior stats/shrinkage.py
+    fitted for this league-season, or None if nothing has been computed.
+
+    Reconstructing the curve matters for hitters the shrinkage layer has no
+    row for at all — someone on the roster who hasn't batted. Projecting
+    them at the flat league mean would rank them *above* a hitter with four
+    PA, which is precisely backwards, and would quietly reinstate the
+    assumption the prior exists to remove."""
+    session = get_session()
+    try:
+        row = session.execute(
+            select(BattingTrueTalent.prior_ln_pa_slope, BattingTrueTalent.prior_center_log_pa)
+            .join(PlayerSeason, PlayerSeason.id == BattingTrueTalent.player_season_id)
+            .join(TeamSeason, TeamSeason.id == PlayerSeason.team_season_id)
+            .where(
+                TeamSeason.league_season_id == league_season_id,
+                BattingTrueTalent.prior_center_log_pa.is_not(None),
+            )
+            .limit(1)
+        ).first()
+        if row is None:
+            return None
+        slope, center = row
+        # A NULL slope means the corpus-wide fallback was used; its constants
+        # are the honest answer there, not "no effect".
+        if slope is None:
+            return (FALLBACK_PLAYING_TIME_PRIOR.slope, FALLBACK_PLAYING_TIME_PRIOR.center_log_pa)
+        return (float(slope), float(center))
+    finally:
+        session.close()
+
+
+@st.cache_data
 def lineup_recommendation(
     league_season_id: int, team_name: str, player_names: list[str], vs_throws: str | None
 ) -> dict:
@@ -2157,6 +2201,49 @@ def lineup_recommendation(
     }
     by_player = {r["player"]: r for _, r in hitters.iterrows()} if not hitters.empty else {}
 
+    # The anchor for a hitter the shrinkage layer has no row for. Not the
+    # league mean — that would rank someone who has never batted above a
+    # hitter with four PA — but this league-season's own playing-time curve,
+    # evaluated at however much evidence they do have.
+    _fit = league_playing_time_prior(league_season_id)
+    _prior = PlayingTimePrior(slope=_fit[0], center_log_pa=_fit[1]) if _fit else None
+
+    def prior_for_pa(pa: int) -> float | None:
+        if _prior is None or ctx_woba is None:
+            return ctx_woba
+        return _prior.mean_for(ctx_woba, pa)
+
+    def _talent_field(name: str, field: str) -> float | None:
+        row = by_player.get(name)
+        if row is None or field not in row:
+            return None
+        v = row[field]
+        return float(v) if v is not None and pd.notna(v) else None
+
+    def season_pa(name: str) -> int:
+        """How much evidence we have about this hitter. Falls back to their
+        observed vs-hand plate appearances when there's no season-stats row:
+        those come from the play-by-play and can exist without one (a player
+        whose season line sits under a different team_season). The platoon
+        adjustment already uses that history, so labelling them "no PA yet"
+        while projecting off 52 PA of it would contradict itself."""
+        row = by_player.get(name)
+        if row is not None and pd.notna(row["pa"]):
+            return int(row["pa"])
+        return sum(
+            int(vs_split[hand][name]["pa"])
+            for hand in ("L", "R")
+            if vs_split[hand].get(name) is not None and pd.notna(vs_split[hand][name]["pa"])
+        )
+
+    def talent_sd(name: str) -> float | None:
+        return _talent_field(name, "shrunk_woba_sd")
+
+    def prior_target(name: str) -> float | None:
+        """What the shrinkage layer pulled this hitter toward — below the
+        league mean for the lightly used (stats/shrinkage.py)."""
+        return _talent_field(name, "prior_woba")
+
     def overall_talent(name: str) -> float | None:
         row = by_player.get(name)
         if row is None:
@@ -2165,12 +2252,20 @@ def lineup_recommendation(
         return overall if pd.notna(overall) else ctx_woba
 
     def adjusted_target(name: str, hand: str | None) -> float | None:
-        # No season data at all: anchor to the same league-context wOBA the
-        # known hitters' shrinkage uses, so best-9 selection compares
-        # everyone on one scale (build_profile's own None-fallback is the
+        # No season-stats row: anchor to the playing-time prior at whatever
+        # evidence they do have, on the same league-context scale the known
+        # hitters' shrinkage uses, so best-9 selection compares everyone
+        # consistently (build_profile's own None-fallback is the
         # component-implied league wOBA, which can sit on a different scale
-        # from the stored context value).
-        target = overall_talent(name) if by_player.get(name) is not None else ctx_woba
+        # from the stored context value — and is the league *mean*, the wrong
+        # anchor here). The platoon step below then pulls this toward their
+        # observed vs-hand line, which for these hitters is the only line
+        # there is.
+        target = (
+            overall_talent(name)
+            if by_player.get(name) is not None
+            else prior_for_pa(season_pa(name))
+        )
         if target is None or hand not in ("L", "R"):
             return target
         split = vs_split[hand].get(name)
@@ -2193,8 +2288,10 @@ def lineup_recommendation(
         audit_rows.append(
             {
                 "player": name,
-                "pa": counts.get("pa", 0),
+                "pa": season_pa(name),
+                "prior_woba": prior_target(name),
                 "shrunk_woba": overall_talent(name),
+                "shrunk_woba_sd": talent_sd(name),
                 "vs_hand_pa": int(split["pa"]) if split is not None else 0,
                 "vs_hand_woba": split["woba"] if split is not None else None,
                 "target_woba": profile.implied_woba,
@@ -2203,35 +2300,59 @@ def lineup_recommendation(
             }
         )
 
-    def season_pa(name: str) -> int:
-        row = by_player.get(name)
-        return int(row["pa"]) if row is not None else 0
-
     def conservative(name: str, hand: str | None) -> float:
-        # Sample-aware ranking score: the adjusted estimate minus an
-        # uncertainty penalty, so "7 PA of nothing ≈ league average" can't
-        # outrank a real track record (see stats/lineup.py).
+        # Evidence-aware ranking score: the adjusted estimate minus one
+        # posterior SD from the shrinkage layer (see stats/lineup.py). The
+        # estimate itself already knows that lightly-used hitters are below
+        # average, so this only has to break ties on how much we know.
         estimate = adjusted_target(name, hand)
-        score = conservative_woba(estimate if estimate is not None else ctx_woba, season_pa(name))
+        score = conservative_woba(
+            estimate if estimate is not None else prior_for_pa(season_pa(name)),
+            season_pa(name),
+            talent_sd(name),
+        )
         return score if score is not None else 0.0
 
     selection_scores = [conservative(name, vs_throws) for name in player_names]
     starters, bench_profiles = select_starters(profiles, scores=selection_scores)
     result = optimize_lineup(starters)
 
-    _STAT_KEYS = ("pa", "avg", "obp", "slg", "iso", "bb_pct", "k_pct", "sb")
+    # Raw counts (ab/h/doubles/…) ride along so a thin-sample rationale can
+    # quote the actual line — "2-for-8 with a double" — instead of asserting
+    # a rate stat that 8 PA can't support.
+    _STAT_KEYS = (
+        "pa", "ab", "h", "doubles", "triples", "hr", "bb",
+        "avg", "obp", "slg", "iso", "bb_pct", "k_pct", "sb",
+        "shrunk_woba", "shrunk_woba_sd",
+    )
+
+    # What the on-screen tables show — the rationale needs more than this
+    # (raw counts, the projection and its SD) but a coach reading the lineup
+    # doesn't want a model-internals column in it.
+    _DISPLAY_STAT_KEYS = ("pa", "avg", "obp", "slg", "iso", "bb_pct", "k_pct", "sb")
 
     def season_stats(name: str) -> dict:
         row = by_player.get(name)
         if row is None:
-            return {}
+            # No season line, but there may still be play-by-play evidence,
+            # and slot_rationales needs the PA count to decide whether a
+            # claim is supportable.
+            return {"pa": season_pa(name)}
         return {k: (row[k] if pd.notna(row[k]) else None) for k in _STAT_KEYS if k in row}
+
+    def display_stats(name: str) -> dict:
+        shown = {k: v for k, v in season_stats(name).items() if k in _DISPLAY_STAT_KEYS}
+        # Always populate PA, including for hitters whose only record is the
+        # play-by-play — otherwise the table shows a blank next to a label
+        # that says "62 PA so far".
+        shown["pa"] = shown.get("pa") or season_pa(name)
+        return shown
 
     stats_by_name = {name: season_stats(name) for name in player_names}
     result.rationale = slot_rationales(result.order, stats_by_name)
 
     lineup_df = pd.DataFrame(
-        [{"slot": slot, "player": name, **season_stats(name)} for slot, name in enumerate(result.order, start=1)]
+        [{"slot": slot, "player": name, **display_stats(name)} for slot, name in enumerate(result.order, start=1)]
     )
 
     bench_rows = []
@@ -2248,7 +2369,11 @@ def lineup_recommendation(
         if roles:
             role = "First bat off the bench " + " & ".join(roles)
         elif season_pa(name) < MIN_PA_FOR_JUDGEMENT:
-            role = f"Too few PA to judge ({season_pa(name)})"
+            # Not eligible to be *named* a pinch-hit option — that is a claim,
+            # and a handful of PA can't support one. But the projection is
+            # still shown rather than replaced with "too few PA to judge",
+            # which said nothing and implied we had no view at all.
+            role = evidence_label(season_pa(name), adjusted_target(name, vs_throws), talent_sd(name))
         else:
             role = ""
         split_l, split_r = vs_split["L"].get(name), vs_split["R"].get(name)
@@ -2256,7 +2381,7 @@ def lineup_recommendation(
             {
                 "player": name,
                 "role": role,
-                **season_stats(name),
+                **display_stats(name),
                 "avg_vs_lhp": split_l["avg"] if split_l is not None else None,
                 "pa_vs_lhp": int(split_l["pa"]) if split_l is not None else 0,
                 "avg_vs_rhp": split_r["avg"] if split_r is not None else None,

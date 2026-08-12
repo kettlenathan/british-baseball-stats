@@ -1,3 +1,5 @@
+import math
+
 import pytest
 
 from db.models import (
@@ -17,12 +19,17 @@ from db.models import (
 from stats.shrinkage import (
     FALLBACK_BATTING_STABILIZATION_PA,
     FALLBACK_PITCHING_STABILIZATION_IP,
+    FALLBACK_PLAYING_TIME_PRIOR,
+    FALLBACK_PLAYING_TIME_SLOPE,
+    PLAYING_TIME_PRIOR_DAMPING,
     _batting_component_variance,
     _pitching_component_variance,
     compute_batting_true_talent,
     compute_pitching_true_talent,
     estimate_batting_stabilization_pa,
     estimate_pitching_stabilization_ip,
+    fit_playing_time_prior,
+    posterior_sd,
     shrink_rate,
 )
 
@@ -196,14 +203,110 @@ def test_compute_batting_true_talent_shrinks_toward_league_mean(session):
     assert low_pa.k_self_calibrated is False
     assert low_pa.stabilization_pa == pytest.approx(FALLBACK_BATTING_STABILIZATION_PA)
 
-    # Both shrunk estimates sit between the observed rate and the league
-    # mean; the higher-PA player is shrunk less (closer to their own
-    # observed rate) and has higher reliability.
+    # Both shrunk estimates sit between the observed rate and the prior they
+    # were shrunk toward — which is the playing-time-aware prior, NOT the
+    # flat league mean, so a lightly-used hitter's estimate can legitimately
+    # fall below .320 even when their observed rate is above it.
     for row in (low_pa, high_pa):
-        lo, hi = sorted([row.observed_woba, 0.320])
+        lo, hi = sorted([row.observed_woba, row.prior_woba])
         assert lo <= row.shrunk_woba <= hi
+    assert low_pa.prior_woba < high_pa.prior_woba
     assert high_pa.reliability > low_pa.reliability
     assert abs(high_pa.shrunk_woba - high_pa.observed_woba) < abs(low_pa.shrunk_woba - low_pa.observed_woba)
+
+
+def test_playing_time_prior_slopes_upward_and_averages_to_zero():
+    """The fit must (a) rate lightly-used hitters below regulars and (b) not
+    move the league's overall level while doing so — the deviation is
+    PA-weighted zero by construction, so re-basing who the mean applies to
+    can't quietly inflate or deflate the league."""
+    rows = [(pa, 0.340 + 0.05 * math.log(pa / 40)) for pa in (5, 8, 12, 20, 30, 45, 60, 90, 120, 200)] * 5
+    prior = fit_playing_time_prior(rows, league_mean=0.340)
+
+    assert prior.self_calibrated
+    assert prior.deviation(5) < prior.deviation(20) < prior.deviation(60) < prior.deviation(200)
+    assert prior.deviation(5) < 0 < prior.deviation(200)
+
+    total_pa = sum(pa for pa, _ in rows)
+    weighted = sum(pa * prior.deviation(pa) for pa, _ in rows) / total_pa
+    assert weighted == pytest.approx(0.0, abs=1e-9)
+
+
+def test_playing_time_prior_is_damped_not_taken_at_face_value():
+    """The raw fit overstates the durable effect (it also picks up hitters
+    whose season was frozen at its worst); scripts/validate_low_pa_prior.py
+    shows applying it undamped scores worse than doing nothing."""
+    rows = [(pa, 0.340 + 0.05 * math.log(pa / 40)) for pa in (5, 8, 12, 20, 30, 45, 60, 90, 120, 200)] * 5
+    damped = fit_playing_time_prior(rows, league_mean=0.340)
+    undamped = fit_playing_time_prior(rows, league_mean=0.340, damping=1.0)
+    assert damped.slope == pytest.approx(PLAYING_TIME_PRIOR_DAMPING * undamped.slope)
+    assert 0 < damped.slope < undamped.slope
+
+
+def test_playing_time_prior_falls_back_to_the_corpus_curve_not_to_flat():
+    """A league-season too small to fit its own curve must not silently
+    revert to "an unknown hitter is league average" — that assumption is what
+    this layer exists to remove, and it is wrong in every league-season
+    measured. It falls back to the corpus-wide curve instead, exactly as the
+    stabilization point falls back to a published constant."""
+    prior = fit_playing_time_prior([(20, 0.340), (30, 0.345)], league_mean=0.340)
+    assert not prior.self_calibrated
+    assert prior.slope == pytest.approx(FALLBACK_PLAYING_TIME_SLOPE)
+    assert prior.deviation(5) < prior.deviation(200)
+
+    # Only the *slope* is borrowed — the pivot is always recomputed from the
+    # population at hand, so the fallback still averages to zero over it
+    # instead of marking the whole group down. Borrowing a pivot fitted on
+    # full seasons and applying it to a partial one is exactly how that goes
+    # wrong.
+    rows = [(pa, 0.340) for pa in (5, 10, 20, 30, 40)]
+    fallback = fit_playing_time_prior(rows, league_mean=0.340)
+    total_pa = sum(pa for pa, _ in rows)
+    assert sum(pa * fallback.deviation(pa) for pa, _ in rows) / total_pa == pytest.approx(0.0, abs=1e-9)
+    assert fallback.center_log_pa != FALLBACK_PLAYING_TIME_PRIOR.center_log_pa
+
+    # A perverse fit (regulars supposedly worse than scrubs) is refused
+    # rather than inverted.
+    backwards = [(pa, 0.340 - 0.05 * math.log(pa / 40)) for pa in (5, 20, 60, 200)] * 15
+    assert not fit_playing_time_prior(backwards, league_mean=0.340).self_calibrated
+
+
+def test_posterior_sd_shrinks_with_evidence_and_starts_at_talent_spread():
+    v_e, k = 0.25, 120.0
+    tau = (v_e / k) ** 0.5
+    # No data at all: uncertainty is exactly the between-player spread.
+    assert posterior_sd(v_e, 0, k) == pytest.approx(tau)
+    assert posterior_sd(v_e, 60, k) < posterior_sd(v_e, 7, k) < posterior_sd(v_e, 0, k)
+    assert posterior_sd(None, 30, k) is None
+
+
+def test_lightly_used_hitter_is_not_projected_as_league_average(session):
+    """The headline behaviour change: an 0-for-7 hitter must land clearly
+    below the league mean, not a whisker under it. Their prior is a lightly-
+    used hitter's prior, and lightly-used hitters in this league are worse.
+
+    This is what keeps the scouting report from recommending the least-known
+    player (see test_scouting_data_access.py's "Enzo" case) — the protection
+    lives here, in the estimate, rather than in a ranking penalty tuned to
+    cancel a prior that was wrong in the first place."""
+    league_season, team_season = _build_league_season(session)
+    _add_batter(session, team_season, source_id=1, pa=7, ab=7, h=0, so=4)
+    _add_batter(session, team_season, source_id=2, pa=60, ab=55, h=14, doubles=2, bb=4, so=10)
+    session.add(LeagueSeasonContext(league_season_id=league_season.id, lg_woba=0.340))
+    session.commit()
+
+    compute_batting_true_talent(session, league_season.id)
+    rows = {r.pa: r for r in session.query(BattingTrueTalent).all()}
+    thin, vet = rows[7], rows[60]
+
+    # The 7-PA hitter is shrunk toward a prior well below the league mean...
+    assert thin.prior_woba < 0.340 - 0.02
+    assert vet.prior_woba > thin.prior_woba
+    # ...so despite 0-for-7 barely moving the needle, the estimate itself now
+    # ranks him behind the vet's real (below-average) track record.
+    assert thin.shrunk_woba < vet.shrunk_woba
+    # And every row carries the uncertainty a consumer needs to rank on.
+    assert thin.shrunk_woba_sd > vet.shrunk_woba_sd > 0
 
 
 def test_compute_pitching_true_talent_shrinks_toward_league_mean(session):

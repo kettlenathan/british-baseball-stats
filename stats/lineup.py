@@ -19,14 +19,24 @@ directly:
   empirical-Bayes form as stats/shrinkage.py, using its published fallback
   stabilization point (a fixed k is fine here — this is an input to a
   heuristic search, not a published stat).
-- The hit-type rates keep the player's own observed *shape* (their mix of
-  singles/doubles/HR) but are scaled by a single factor so the profile's
-  implied wOBA equals the player's **shrunk** wOBA from BattingTrueTalent —
-  i.e. the overall quality estimate comes from the shrinkage layer, and the
-  raw season line only contributes how that quality is distributed across
-  hit types. Batters with no data at all get the league profile.
+- The hit-type rates are shrunk on that same k, then scaled by a single
+  factor so the profile's implied wOBA equals the player's **shrunk** wOBA
+  from BattingTrueTalent — i.e. the overall quality estimate comes from the
+  shrinkage layer, and the season line contributes only how that quality is
+  distributed across hit types, itself discounted by how much of it there is.
+  Batters with no data at all get the league profile.
 - IBB is not modeled separately (it's situational, not a talent), so BB here
   is all walks at the uBB wOBA weight.
+
+Nothing here treats a thin sample as no sample. A hitter with 8 PA is a
+hitter with 8 PA of evidence: their shrunk wOBA is anchored to a prior that
+already knows lightly-used hitters are below average (stats/shrinkage.py's
+playing-time prior), their hit mix pulls their profile a little way from
+league shape, and what remains uncertain is carried as an interval rather
+than erased. What this module must never do is *claim* more than 8 PA can
+support — hence conservative_woba below and the shrunk trait ranks in
+slot_rationales, which handle thin evidence by discounting it continuously
+rather than by refusing to speak below a threshold.
 
 An optional platoon adjustment re-targets the profile at a shrunk vs-hand
 wOBA (see platoon_adjusted_woba) when the opposing starter's throwing hand
@@ -189,16 +199,16 @@ def build_profile(
     triples = counts.get("triples") or 0
     hr = counts.get("hr") or 0
     singles = hits - doubles - triples - hr
-    raw_hit_rates = (
-        {
-            "single": singles / pa,
-            "double": doubles / pa,
-            "triple": triples / pa,
-            "hr": hr / pa,
-        }
-        if pa and hits > 0
-        else {key: league_rates[key] for key in ("single", "double", "triple", "hr")}
-    )
+    # The hit-type mix is shrunk on the same k as the walk rates. Without
+    # this a hitter whose only two hits were home runs gets a profile that is
+    # *entirely* home runs, which then survives the wOBA rescale below as a
+    # bizarre all-or-nothing bat: never on base, enormous power. The level of
+    # a small sample was already being discounted; its shape was not, which
+    # was the same mistake in the opposite direction.
+    observed_hit_counts = {"single": singles, "double": doubles, "triple": triples, "hr": hr}
+    raw_hit_rates = {
+        key: (observed_hit_counts[key] + k * league_rates[key]) / (pa + k) for key in observed_hit_counts
+    }
 
     league_woba = sum(_EVENT_WEIGHTS[e] * league_rates[e] for e in ("bb", "hbp", "single", "double", "triple", "hr"))
     target = target_woba if target_woba is not None else league_woba
@@ -364,35 +374,50 @@ def expected_runs(profiles: list[BatterProfile], innings: int = DEFAULT_INNINGS)
 
 LINEUP_SIZE = 9
 
-# A shrunk estimate built on a tiny sample sits near league average by
-# construction — which means the *least-known* player can out-rank a proven
-# slightly-below-average bat if rankings use the point estimate alone (an
-# 0-for-7 player "beating" a .240 hitter with 60 PA for a bench role).
-# Judgement-style outputs therefore (a) rank on a lower-confidence-bound
-# score that explicitly penalizes small samples, and (b) refuse to name
-# anyone "best bat" on fewer than MIN_PA_FOR_JUDGEMENT plate appearances.
+# Below this many PA no *claim* is made about a hitter in prose — they are
+# not named "best bat off the bench", and their rate stats are not quoted as
+# strengths. They are still projected, still ranked, and still shown with a
+# number: the threshold gates assertions, not estimates. Selection itself has
+# no threshold at all; conservative_woba handles thin evidence continuously,
+# which is why a hard cutoff is no longer needed there.
 MIN_PA_FOR_JUDGEMENT = 20
 
-# Per-PA standard deviation of a wOBA-weighted outcome (~0.5 across normal
-# batting lines). The penalty denominator uses the player's OWN sample plus
-# a small floor — deliberately NOT the shrinkage posterior's (pa + k), where
-# k=120 would dominate and leave 7 PA and 60 PA nearly indistinguishable.
-# The ranking question is "how much evidence do we have about THIS player",
-# and that is their own plate appearances.
-_WOBA_EVENT_SD = 0.5
-_PENALTY_FLOOR_PA = 10.0
+# How many posterior standard deviations to subtract when ranking. This is a
+# risk preference, not a measurement: at z=1 we rank hitters by roughly the
+# 16th percentile of what they might be, so a well-evidenced average bat is
+# preferred to an unknown who *might* be good. One SD is deliberately mild —
+# with the playing-time prior in place the point estimates are already
+# honest about lightly-used hitters, so this no longer has to double as a
+# correction for an over-generous prior (the old ad-hoc penalty did, which
+# is why it also docked proven 60-PA regulars ~60 points of wOBA).
+RANKING_CONFIDENCE_Z = 1.0
+
+# Used only when a caller has no posterior SD to hand (no BattingTrueTalent
+# row for this hitter). tau = sqrt(V_e / k) for a typical league-season here;
+# at 0 PA the posterior SD equals exactly this, so it is the conservative
+# choice for an unknown.
+_FALLBACK_TALENT_SD = 0.046
 
 
-def conservative_woba(estimate: float | None, pa: int) -> float | None:
-    """Sample-aware ranking score: the (shrunk, adjusted) point estimate
-    minus an uncertainty penalty of sd/sqrt(own PA + floor). Two players
-    with similar estimates rank by who has more evidence behind theirs —
-    e.g. 60 PA of slightly-below-average beats 7 hitless PA whose shrunk
-    estimate happens to sit near league average. For ranking/selection
-    only; displayed stats stay unpenalized."""
+def conservative_woba(estimate: float | None, pa: int, sd: float | None = None) -> float | None:
+    """Evidence-aware ranking score: the (shrunk, adjusted) point estimate
+    minus RANKING_CONFIDENCE_Z posterior standard deviations. Two hitters
+    with the same estimate rank by who has more evidence behind theirs.
+
+    `sd` is stats/shrinkage.py's `shrunk_woba_sd` — sqrt(V_e / (pa + k)) —
+    and callers should pass it. It is a genuine posterior SD rather than the
+    hand-tuned sd/sqrt(pa + floor) penalty this replaced, which was steep
+    (.158 at 0 PA falling to .060 at 60) because it was silently standing in
+    for a prior that assumed unknown hitters were league average. Now that
+    the prior knows better, the honest uncertainty is much flatter (~.046 to
+    ~.037 over the same range) and the two jobs are separated.
+
+    For ranking and selection only; displayed estimates stay unpenalized."""
     if estimate is None:
         return None
-    return estimate - _WOBA_EVENT_SD / math.sqrt(max(pa, 0) + _PENALTY_FLOOR_PA)
+    if sd is None or sd <= 0 or math.isnan(sd):
+        sd = _FALLBACK_TALENT_SD
+    return estimate - RANKING_CONFIDENCE_Z * sd
 
 
 def select_starters(
@@ -529,14 +554,138 @@ def _ordinal(rank: int) -> str:
 
 
 # Traits considered for the per-slot rationale, in priority order: (stat
-# key, higher-is-better, phrasing). K% is the one lower-is-better entry.
+# key, higher-is-better, published stabilization point in the stat's own
+# denominator, phrasing). K% is the one lower-is-better entry.
+#
+# The stabilization points are the standard published ones (Carleton et al.,
+# the same literature stats/shrinkage.py's fallback comes from) and they
+# differ by an order of magnitude between stats: strikeout rate is close to
+# real after 60 PA, on-base percentage is still mostly noise at 300. Ranking
+# raw rates would treat those as equally solid. `sb` is a counting stat with
+# no rate denominator, so it isn't shrunk — a hitter can't accumulate steals
+# without playing, which is its own sample-size guard.
 _TRAIT_SPECS = [
-    ("obp", True, lambda v, o: f"{o} OBP in this lineup ({v:.3f})"),
-    ("iso", True, lambda v, o: f"{o.replace('best', 'most')} extra-base power (ISO {v:.3f})"),
-    ("k_pct", False, lambda v, o: f"{o.replace('best', 'hardest')} to strike out ({v:.0%} K rate)"),
-    ("sb", True, lambda v, o: f"{o.replace('best', 'most')} stolen bases ({v:.0f} SB)"),
-    ("bb_pct", True, lambda v, o: f"{o} walk rate ({v:.0%} of PA)"),
+    ("obp", True, 300.0, lambda v, o: f"{o} OBP in this lineup ({v:.3f})"),
+    ("iso", True, 160.0, lambda v, o: f"{o.replace('best', 'most')} extra-base power (ISO {v:.3f})"),
+    ("k_pct", False, 60.0, lambda v, o: f"{o.replace('best', 'hardest')} to strike out ({v:.0%} K rate)"),
+    ("sb", True, None, lambda v, o: f"{o.replace('best', 'most')} stolen bases ({v:.0f} SB)"),
+    ("bb_pct", True, 120.0, lambda v, o: f"{o} walk rate ({v:.0%} of PA)"),
 ]
+
+
+def _shrunk_trait_ranks(order: list[str], stats_by_name: dict[str, dict]) -> dict[str, dict[str, int]]:
+    """Rank each hitter on each trait *within this nine*, after shrinking the
+    trait toward the nine's own PA-weighted mean by its published
+    stabilization point.
+
+    Shrinking toward the lineup's mean rather than the league's is the right
+    regularizer here precisely because the claim being made is a within-nine
+    one ("best OBP in this lineup"): the comparison set and the prior are the
+    same population, so a hitter only out-ranks the others by evidence they
+    actually have. This is what lets the hard PA threshold go. An 8-PA .450
+    OBP shrinks to within a hair of the lineup average and quietly fails to
+    place; an 80-PA .450 OBP stays where it is and gets the credit. No
+    hitter is excluded from competing, and nothing changes discontinuously
+    at any particular plate appearance."""
+
+    def value(name: str, key: str):
+        v = stats_by_name.get(name, {}).get(key)
+        return None if v is None or (isinstance(v, float) and math.isnan(v)) else v
+
+    ranks: dict[str, dict[str, int]] = {}
+    for key, higher_better, k, _ in _TRAIT_SPECS:
+        present = [(name, value(name, key), stats_by_name.get(name, {}).get("pa") or 0) for name in order]
+        present = [(n, v, pa) for n, v, pa in present if v is not None]
+        if not present:
+            ranks[key] = {}
+            continue
+        if k is None:
+            scored = [(n, v) for n, v, _ in present]
+        else:
+            total_pa = sum(pa for _, _, pa in present)
+            group_mean = (
+                sum(v * pa for _, v, pa in present) / total_pa
+                if total_pa
+                else sum(v for _, v, _ in present) / len(present)
+            )
+            scored = [(n, (pa * v + k * group_mean) / (pa + k)) for n, v, pa in present]
+        # Ties are common once traits are shrunk (identical rates collapse to
+        # identical estimates), and float noise in the group mean would
+        # otherwise order them arbitrarily. Break on lineup position so the
+        # same inputs always give the same ranks.
+        position = {name: i for i, name in enumerate(order)}
+        scored.sort(key=lambda nv: (-nv[1] if higher_better else nv[1], position[nv[0]]))
+        ranks[key] = {name: r for r, (name, _) in enumerate(scored)}
+    return ranks
+
+
+def evidence_label(pa: int, estimate: float | None, sd: float | None) -> str:
+    """How much we know about a hitter, in one short phrase, for table cells
+    (the bench "role" column) rather than prose.
+
+    Deliberately states the projection instead of only the shortfall: the old
+    "Too few PA to judge (7)" told a coach that we had no view, when in fact
+    we had a view and a range for it. A hitter with no PA at all still gets a
+    number — the playing-time prior's estimate for someone who hasn't played,
+    which is below league average, not at it."""
+    prefix = "No PA yet" if not pa else f"{pa} PA so far"
+    if estimate is None or (isinstance(estimate, float) and math.isnan(estimate)):
+        return prefix
+    label = f"{prefix} — projects {estimate:.3f}"
+    if sd and not math.isnan(sd) and sd > 0:
+        label += f" ±{sd:.3f}"
+    return label
+
+
+def _evidence_note(stats: dict) -> str | None:
+    """The thin-evidence half of a rationale line: what the model projects,
+    how wide that is, and the raw line it came from. Returns None for a
+    hitter with enough PA to describe in the ordinary way.
+
+    This replaces a flat "too few PA to judge; treated as roughly league
+    average", which was both unhelpful and untrue — the hitter was never
+    treated as league average, and a coach still has to bat them somewhere.
+    Showing the projection with its range says the same thing honestly:
+    here is our best guess, here is how little we know, here is what we saw."""
+    pa = stats.get("pa") or 0
+    if pa >= MIN_PA_FOR_JUDGEMENT:
+        return None
+
+    estimate = stats.get("shrunk_woba")
+    sd = stats.get("shrunk_woba_sd")
+    bits = []
+    if estimate is not None and not (isinstance(estimate, float) and math.isnan(estimate)):
+        if sd and not math.isnan(sd) and sd > 0:
+            bits.append(f"projects {estimate:.3f} wOBA (likely range {estimate - sd:.3f}-{estimate + sd:.3f})")
+        else:
+            bits.append(f"projects {estimate:.3f} wOBA")
+
+    raw = _raw_line(stats)
+    if raw:
+        bits.append(raw)
+    if not bits:
+        return f"only {pa} PA so far — too little to say much, but they have to bat somewhere"
+    return f"{pa} PA so far — " + "; ".join(bits)
+
+
+def _raw_line(stats: dict) -> str | None:
+    """"2-for-8 with a double and a walk" — the actual evidence, in the form
+    a coach would say it out loud."""
+    h, ab = stats.get("h"), stats.get("ab")
+    if h is None or ab is None or not ab:
+        return None
+    extras = []
+    for key, label in (("doubles", "double"), ("triples", "triple"), ("hr", "home run")):
+        n = stats.get(key) or 0
+        if n:
+            extras.append(f"{n} {label}{'s' if n > 1 else ''}" if n > 1 else f"a {label}")
+    bb = stats.get("bb") or 0
+    if bb:
+        extras.append(f"{bb} walks" if bb > 1 else "a walk")
+    line = f"{int(h)}-for-{int(ab)}"
+    if extras:
+        line += " with " + (", ".join(extras[:-1]) + " and " + extras[-1] if len(extras) > 1 else extras[0])
+    return line
 
 
 def slot_rationales(order: list[str], stats_by_name: dict[str, dict]) -> list[str]:
@@ -545,40 +694,47 @@ def slot_rationales(order: list[str], stats_by_name: dict[str, dict]) -> list[st
     already knows — never model internals like scaled wOBA, which all look
     alike. Each hitter is described by the traits where they rank top-3
     *within this specific nine*, so the line answers "why this hitter here,
-    relative to the other eight". stats_by_name values may contain pa, avg,
-    obp, slg, iso, bb_pct, k_pct, sb (any may be missing/None)."""
+    relative to the other eight".
+
+    Hitters with little evidence behind them are described differently, not
+    silently: they get their projection, its range, and their raw line (see
+    _evidence_note). They also still compete for trait ranks, because those
+    ranks are computed on shrunk traits and so can't be won on 8 PA of luck
+    (see _shrunk_trait_ranks). stats_by_name values may contain pa, ab, h,
+    doubles, triples, hr, bb, avg, obp, slg, iso, bb_pct, k_pct, sb,
+    shrunk_woba, shrunk_woba_sd (any may be missing/None)."""
 
     def value(name: str, key: str):
         v = stats_by_name.get(name, {}).get(key)
         return None if v is None or (isinstance(v, float) and math.isnan(v)) else v
 
-    # Hitters under the judgement threshold don't compete for trait ranks
-    # either — an 8-PA .450 OBP must not outrank a real one.
-    judged = [name for name in order if (stats_by_name.get(name, {}).get("pa") or 0) >= MIN_PA_FOR_JUDGEMENT]
-    ranks: dict[str, dict[str, int]] = {key: {} for key, _, _ in _TRAIT_SPECS}
-    for key, higher_better, _ in _TRAIT_SPECS:
-        scored = [(name, value(name, key)) for name in judged]
-        scored = [(name, v) for name, v in scored if v is not None]
-        scored.sort(key=lambda nv: -nv[1] if higher_better else nv[1])
-        ranks[key] = {name: r for r, (name, v) in enumerate(scored)}
+    ranks = _shrunk_trait_ranks(order, stats_by_name)
 
     lines = []
     for slot, name in enumerate(order, start=1):
         stats = stats_by_name.get(name, {})
         pa = stats.get("pa") or 0
         if not pa:
-            lines.append(f"{slot}. {name} — no season data yet; projected as a league-average bat.")
-            continue
-        if pa < MIN_PA_FOR_JUDGEMENT:
-            # Don't cite a .450 OBP built on 8 PA as if it meant something.
             lines.append(
-                f"{slot}. {name} — only {pa} PA this season, too few to judge; "
-                "treated as roughly league average until there's more data."
+                f"{slot}. {name} — no season data yet; projected from the league's "
+                "lightly-used hitters, who are below average."
             )
             continue
+
+        note = _evidence_note(stats)
+        if note is not None:
+            # Thin evidence gets the projection and the raw line, never a
+            # trait claim. Shrinking the trait ranks keeps this hitter from
+            # *displacing* a proven one by much, but it cannot make an 8-PA
+            # .600 OBP worth quoting as a strength — and quoting the shrunk
+            # value instead would contradict the OBP column in the table
+            # right above. So the claim is simply not made.
+            lines.append(f"{slot}. {name} — {note}.")
+            continue
+
         traits = []
-        for key, _, phrase in _TRAIT_SPECS:
-            rank = ranks[key].get(name)
+        for key, _, _, phrase in _TRAIT_SPECS:
+            rank = ranks.get(key, {}).get(name)
             v = value(name, key)
             if rank is not None and rank <= 2 and v is not None:
                 # Zero steals or an ISO of .000 isn't a strength even if it
@@ -590,6 +746,7 @@ def slot_rationales(order: list[str], stats_by_name: dict[str, dict]) -> list[st
                 traits.append(phrase(v, _ordinal(rank)))
             if len(traits) == 2:
                 break
+
         if not traits:
             obp, slg = value(name, "obp"), value(name, "slg")
             line_bits = [f"{obp:.3f} OBP" if obp is not None else None, f"{slg:.3f} SLG" if slg is not None else None]

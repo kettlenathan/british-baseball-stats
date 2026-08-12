@@ -348,7 +348,7 @@ st.markdown(
     "player's observed rate toward the league-season mean, weighted by how much playing time "
     "they've actually had:"
 )
-st.latex(r"\text{shrunk} = \frac{n \cdot \text{observed} + k \cdot \text{league mean}}{n + k}")
+st.latex(r"\text{shrunk} = \frac{n \cdot \text{observed} + k \cdot \text{prior}}{n + k}")
 st.markdown(
     "where `n` is PA (batters) or IP (pitchers), and `k` is a **stabilization point** — the "
     "sample size at which observed and league-average performance are weighted equally. Rather "
@@ -370,9 +370,41 @@ st.markdown(
     "wherever it's displayed."
 )
 st.markdown(
-    "This is applied to every player-season regardless of sample size — a player with zero PA "
-    "simply reduces to the league mean with 0% reliability, which is the point: the smallest "
-    "samples are exactly who benefits most from this adjustment."
+    "This is applied to every player-season regardless of sample size — the smallest samples "
+    "are exactly who benefits most from this adjustment."
+)
+
+st.markdown("##### What a lightly-used hitter is regressed *toward*")
+st.markdown(
+    "Not the flat league average. Playing time in these leagues is strongly "
+    "performance-selected — better hitters get picked more — so \"we know nothing about this "
+    "player, assume they're average\" is measurably wrong. Across every scraped player-season, "
+    "wOBA relative to the league mean runs about **-.088 for hitters with 1-4 PA** and "
+    "**-.064 at 5-9 PA**, rising through **+.019 at 40-79** and **+.064 at 80-149**. The "
+    "relationship is remarkably consistent: it points the same way in **all 25** league-seasons "
+    "large enough to measure it separately."
+)
+st.markdown(
+    "So the number a batter is regressed toward is the league mean plus a term fitted from that "
+    "league-season's own players, as a function of how much they've played. The fit is "
+    "re-centred so it averages to exactly zero across the league — it changes *who* the league "
+    "average applies to, never the league average itself."
+)
+st.markdown(
+    "It's also deliberately **damped to about 40% of the measured effect**, because the raw "
+    "relationship isn't all durable talent. Some of it is a hitter whose season was frozen at "
+    "its worst by not being picked again — real, but about a line that already happened rather "
+    "than about how they'll hit next weekend. Splitting each season chronologically and "
+    "predicting the games the model hadn't seen separates the two, and says the damped version "
+    "beats regressing to the flat mean while the **undamped version is worse than doing "
+    "nothing at all**."
+)
+st.markdown(
+    "Every shrunk value also carries its own **uncertainty** (the posterior standard deviation), "
+    "which is what the Scouting Report ranks bench options on and quotes as a range for hitters "
+    "with only a handful of PA. The practical effect is that a thinly-sampled hitter is neither "
+    "flattered into looking league-average nor written off as unknowable — they get a real "
+    "projection with an honest error bar attached."
 )
 
 st.divider()
@@ -564,23 +596,33 @@ st.markdown(
 st.markdown(
     "The **lineup optimizer** turns each available batter into per-PA probabilities of "
     "walk/HBP/single/double/triple/HR/out. The overall quality of the profile is anchored to the "
-    "batter's *true-talent* (shrunk) wOBA from the shrinkage layer above — the raw season line "
-    "only contributes the *shape* (their observed mix of hit types), scaled to match that target. "
-    "Walk and HBP rates are shrunk toward league average with the published batting "
-    "stabilization point. When the opposing starter's throwing hand is known, the target wOBA is "
-    "platoon-adjusted: the batter's observed career vs-hand wOBA is shrunk toward their overall "
-    "talent with a much larger stabilization point (300 PA), because platoon splits stabilize "
-    "very slowly and a dozen PA against lefties is nearly all noise."
+    "batter's *true-talent* (shrunk) wOBA from the shrinkage layer above — the season line "
+    "contributes the *shape* (their mix of hit types), scaled to match that target. Walk, HBP "
+    "and hit-type rates are all shrunk toward the league's with the published batting "
+    "stabilization point, so a hitter whose only two hits were home runs doesn't get a profile "
+    "that is entirely home runs. When the opposing starter's throwing hand is known, the target "
+    "wOBA is platoon-adjusted: the batter's observed career vs-hand wOBA is shrunk toward their "
+    "overall talent with a much larger stabilization point (300 PA), because platoon splits "
+    "stabilize very slowly and a dozen PA against lefties is nearly all noise."
 )
 st.markdown(
     "Rankings that pick between players (who starts, who's the first bat off the bench) use a "
-    "**sample-penalized score**, not the shrunk estimate alone: the estimate minus an uncertainty "
-    "penalty that shrinks with the player's own plate appearances. This matters because shrinkage "
-    "parks a near-empty sample at league average — without the penalty, an 0-for-7 hitter "
-    "(estimate ≈ league average) would out-rank a proven slightly-below-average bat with 60 PA. "
-    "On top of that, no one is *named* a best/first-choice option — pinch-hit roles, per-slot "
-    "stat claims — on fewer than 20 PA this season; below that they're explicitly marked as "
-    "having too few PA to judge."
+    "**lower confidence bound** rather than the point estimate alone: the estimate minus one "
+    "posterior standard deviation. Two hitters projected alike are separated by which projection "
+    "has more evidence behind it. This is a mild adjustment by design — the heavy lifting is "
+    "done by the playing-time-aware prior described above, which already knows a hitter with a "
+    "handful of PA is more likely below average than at it."
+)
+st.markdown(
+    "Hitters with **fewer than 20 PA** are still projected, still ranked, and still shown with a "
+    "number — what changes is that no *claim* is made about them. They aren't named the first "
+    "bat off the bench, and their rate stats aren't quoted as strengths (a .600 OBP over 8 PA "
+    "isn't evidence of anything). Instead their line reports the projection, its likely range, "
+    "and the raw line it came from: *\"8 PA so far — projects .352 (likely range .308-.396); "
+    "3-for-6 with a double and 2 walks.\"* The per-slot trait rankings they compete in are "
+    "computed on **shrunk** versions of each stat, using that stat's own published stabilization "
+    "point (K% settles after roughly 60 PA, OBP not until around 300), so nothing jumps "
+    "discontinuously at any particular plate appearance."
 )
 st.markdown(
     "When more than nine hitters are available, the **nine best adjusted bats start** and the "

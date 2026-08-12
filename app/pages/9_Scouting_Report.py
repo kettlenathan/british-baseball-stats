@@ -267,8 +267,10 @@ else:
         st.dataframe(bench, hide_index=True, use_container_width=True, column_config=column_config_for(bench))
         st.caption(
             "Pinch-hit calls compare each bench bat's record against left- and right-handed pitching, "
-            "penalized for small samples — and nobody is named a pinch-hit option on fewer than "
-            "20 PA this season (they're marked 'too few PA to judge' instead)."
+            "ranked on a lower confidence bound so a projection with more evidence behind it wins a "
+            "tie. Hitters under 20 PA aren't *named* as an option — a handful of PA can't support "
+            "that call — but their projection and its margin are still shown, because a thin sample "
+            "is better information than none."
         )
     with st.expander("Under the hood: what the model believed about each hitter"):
         profiles = lineup_data["profiles"]

@@ -22,7 +22,7 @@ _FORMATTED_COLS = {
     "era_plus": "%.0f", "ip": "%.1f", "fpct": "%.3f", "avg_risp": "%.3f",
     "fps_pct": "percent", "pct": "%.3f", "r_pg": "%.2f", "ra_pg": "%.2f", "lob_pg": "%.2f",
     "observed_woba": "%.3f", "shrunk_woba": "%.3f", "observed_fip": "%.2f", "shrunk_fip": "%.2f",
-    "reliability": "percent",
+    "reliability": "percent", "shrunk_woba_sd": "%.3f", "prior_woba": "%.3f",
     "pull_pct": "percent", "center_pct": "percent", "oppo_pct": "percent", "pull_minus_oppo": "percent",
     "singles_pct": "percent", "doubles_pct": "percent", "triples_pct": "percent", "hr_pct": "percent",
     "pc1": "%.2f", "pc2": "%.2f", "silhouette": "%.3f", "inertia": "%.1f",

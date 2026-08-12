@@ -33,10 +33,11 @@ uv run python -m scripts.refresh_data --leagues nbl --years 2026 --last-week   #
 uv run python -m scripts.backfill_divisions
 uv run python -m scripts.backfill_divisions --allow-fetch   # fetch anything not cached
 
-# Validation harnesses. Both hold out games the models never saw; re-run the
+# Validation harnesses. Each holds out data the model never saw; re-run the
 # relevant one before changing the model it guards.
 uv run python -m scripts.validate_strength            # stats/team_strength.py
 uv run python -m scripts.validate_division_strength   # stats/division_strength.py (the Phase 3 gate)
+uv run python -m scripts.validate_low_pa_prior        # stats/shrinkage.py's playing-time prior
 
 # DB schema migrations (Alembic; models.py is the source of truth)
 uv run alembic revision --autogenerate -m "..."
@@ -403,6 +404,46 @@ writes back upstream.
   qualifying players, or the variance decomposition goes non-positive) — `k_self_calibrated`
   on each row records which path was used. Writes `BattingTrueTalent`/`PitchingTrueTalent`,
   one row per player-season, via the normal `stats/recompute.py` pipeline.
+  **Batters are not shrunk toward the flat league mean.** Playing time here is strongly
+  performance-selected, so "an unknown hitter is league average" is measurably false: across
+  9,602 player-seasons, wOBA minus league runs −.088 at 1-4 PA, −.064 at 5-9, −.042 at 10-19,
+  through +.019 at 40-79 and +.064 at 80-149, and the PA-weighted fit `wOBA − lg = −0.190 +
+  0.052·ln(PA)` points the same way in **all 25** league-seasons that can fit one (slope mean
+  +.041, sd .012). So the prior mean is `lg_woba + f(PA)`, fitted per league-season by
+  PA-weighted least squares on ln(PA) and **re-centred so its own PA-weighted mean is exactly
+  zero** — it changes who the league mean applies to, never the league mean itself. Stored as
+  `BattingTrueTalent.prior_woba`, with `prior_ln_pa_slope` recording the fitted slope (NULL
+  where the fallback was used), the same "which path" role `k_self_calibrated` plays. Two
+  things here should not be undone casually:
+  - **`PLAYING_TIME_PRIOR_DAMPING = 0.40`, not 1.0**, and it is tuned jointly with
+    **`MIN_PA_FOR_PRIOR_CURVE = 12.0`** — sweep the two together, they interact strongly. The
+    contemporaneous fit conflates real talent with within-season attrition (a hitter who starts
+    0-for-6 stops being picked, so their line is frozen at its low point); only the first
+    should project. `scripts/validate_low_pa_prior.py` is the gate and must be re-run before
+    changing any of this: it splits each league-season chronologically, re-fits the league
+    mean, `k` and the curve on the seen portion alone, and predicts the held-out remainder.
+    Over 6,654 held-out hitter-remainders it puts the flat prior 3.4% ahead of ignoring the
+    hitter and 20% ahead of the raw line, the damped playing-time prior a further **0.71%**
+    ahead of the flat prior — and the **undamped** version 0.44% *worse* than the flat prior.
+    Two caveats worth keeping: the clamp matters more than it looks (at the natural-seeming
+    value of 3 the curve's bottom is so steep that no damping above 0.2 helps lightly-used
+    hitters at all, because the curve is fitted on end-of-season PA where 3 PA means "available
+    and not picked", while mid-season it often means "hasn't debuted yet"); and 0.40 is **not**
+    a clean sweep — it improves the 1-9, 20-39 and 40+ buckets and is 0.15% worse in the 10-19
+    bucket, chosen on the pooled number with that regression accepted. Don't describe it as
+    improving everything.
+  - **The fallback when a league-season can't fit its own curve is the corpus-wide curve
+    (`FALLBACK_PLAYING_TIME_PRIOR`), not a flat mean.** Same principle as falling back to a
+    published `k` rather than to no shrinkage: assuming no playing-time effect isn't the
+    neutral option, it's a specific claim the data rejects everywhere it has been measured.
+    All 25 real league-seasons currently fit their own, so this guards small/partial ones —
+    but reverting to flat there would quietly reinstate the assumption this layer removes.
+  Each row also carries `shrunk_woba_sd`, the posterior SD `sqrt(V_e / (n + k))`, so consumers
+  rank on a lower confidence bound or quote a range instead of inventing their own small-sample
+  penalty. It is much flatter than intuition suggests (.046 at 0 PA to .037 at 60 with k=120):
+  once the prior knows lightly-used hitters are worse, there is little left for an uncertainty
+  term to say, and a *steep* penalty is the signature of a prior that's wrong. Pitching has no
+  counterpart to any of this — the selection story differs for pitchers and nothing needs it.
 - `probable_pitchers.py` — read-time (not materialized) inference of an opponent's likely
   starters for the Scouting Report page, since the site publishes no rotation data: each
   played game's starter is identified from the play-by-play (the pitcher of the team's first
@@ -423,15 +464,38 @@ writes back upstream.
   operators are collapsed to 24×24 matrices and lru_cached (profiles are frozen dataclasses)
   — this is what makes optimize_lineup fast enough (~1.5s) to run live in the page. When more
   than 9 hitters are available, `select_starters` starts the 9 best adjusted bats and the rest
-  are benched with best-pinch-hit-vs-LHP/RHP roles (both hands rated per player). Every
-  pick-between-players ranking (starters, bench roles) uses `conservative_woba` — the estimate
-  minus a penalty of sd/sqrt(own PA + floor) — because shrinkage parks near-empty samples at
-  league average, which would otherwise let an 0-for-7 bat out-rank a proven 60-PA hitter; and
-  no one is *named* a best/first-choice option (roles, per-slot stat claims) under
-  `MIN_PA_FOR_JUDGEMENT` (20) season PA — they're marked "too few PA to judge". User-facing
+  are benched with best-pinch-hit-vs-LHP/RHP roles (both hands rated per player). User-facing
   rationale comes from `slot_rationales` and is deliberately phrased in box-score stats
   (OBP/ISO/K%/SB ranked within the chosen nine), never shrunk-wOBA internals — those live only
   in the page's "under the hood" audit table.
+  **Thin samples are discounted continuously, never flattened to league average.** Three
+  separate mechanisms, each doing one job, and it matters that they stay separate:
+  1. *Level* comes from `shrinkage.py`'s playing-time-aware prior (above), so a 7-PA hitter's
+     estimate already sits below league rather than a whisker under it.
+  2. *Shape* — the hit-type mix in `build_profile` — is shrunk on the same k as the walk rates.
+     Previously the mix was taken at 100% weight regardless of sample, so a hitter whose only
+     two hits were home runs got an all-homer profile: the level of a small sample was being
+     discounted while its shape was trusted completely, the same mistake in the opposite
+     direction.
+  3. *Ranking* (`conservative_woba`, used for starters and bench roles) subtracts
+     `RANKING_CONFIDENCE_Z` (1.0) posterior SDs, passed in from `BattingTrueTalent.shrunk_woba_sd`.
+     This replaced an ad-hoc `sd/sqrt(own PA + floor)` penalty which was steep (.158 at 0 PA
+     to .060 at 60) precisely because it was standing in for job (1) — with the side effect of
+     docking proven 60-PA regulars ~60 wOBA points. Now that the prior is honest, the honest
+     uncertainty is flat and mild. **Don't re-steepen this to fix a ranking problem** — a steep
+     penalty here means the prior is wrong, and the prior is where it should be fixed.
+  `MIN_PA_FOR_JUDGEMENT` (20) survives but its meaning narrowed: it gates *claims*, not
+  estimates. Under it, a hitter is still projected, still ranked, and still shown a number —
+  they just aren't named the first bat off the bench and their rate stats aren't quoted as
+  strengths. `slot_rationales` gives them `_evidence_note` instead ("8 PA so far — projects
+  .352 (likely range .308-.396); 3-for-6 with a double and 2 walks"), and `evidence_label` is
+  the one-line table-cell form of the same thing. The old "too few PA to judge; treated as
+  roughly league average" was both unhelpful and untrue, and a coach still has to bat them
+  somewhere. There is **no hard threshold in the trait ranking**: `_shrunk_trait_ranks` shrinks
+  OBP/ISO/K%/BB% toward the nine's own mean on each stat's published stabilization point (K%
+  ~60 PA, OBP ~300 — they differ by an order of magnitude, so ranking raw rates treats them as
+  equally solid when they aren't), which means an 8-PA .600 OBP fails to place on its own
+  merits rather than by being excluded, and nothing jumps at any particular plate appearance.
 - `archetypes.py` — unsupervised k-means clustering of batters into descriptive archetypes,
   computed at read time (not materialized, unlike everything else in `stats/`) since it
   depends on user-adjustable parameters (population scope, k) with no single fixed "correct"
