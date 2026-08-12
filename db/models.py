@@ -86,6 +86,48 @@ class LeagueSeason(Base):
     games: Mapped[list["Game"]] = relationship(back_populates="league_season")
 
 
+class Division(Base):
+    """A regional grouping within one league_season, e.g. 2026 Division 3's
+    "North" / "Central" / "South" / "SWWBL".
+
+    Scoped to a single league_season on purpose, unlike Team and Player: the
+    site provides no year-spanning division identity and the names cannot
+    supply one. The same regional grouping is published as "AA - Central"
+    (2021), "South A" (2022), "South" (2023), "A" (2024, 2025) and "North"
+    (2026), and names are reused for *different* regions in different years,
+    so matching divisions across seasons by name would silently join
+    unrelated groupings. Division counts churn as well — the NBL ran as a
+    single division 2021-2025 and splits North/South for the first time in
+    2026 — so consumers must handle a league-season with one division, or
+    with none recorded at all.
+
+    Membership comes from the site's `/standings` page rather than the
+    schedule payload (scraper/scrape_standings.py): standings covers every
+    scraped league-season including 2021, whereas the schedule's
+    `wbsc_tournament_group_id` is absent for all of 2021 and partial for
+    2024. The group id is still recorded here when known, because it is the
+    only thing that tags an individual *game* with the division it counted
+    toward (Game.source_group_id).
+    """
+
+    __tablename__ = "divisions"
+    __table_args__ = (UniqueConstraint("league_season_id", "name"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    league_season_id: Mapped[int] = mapped_column(ForeignKey("league_seasons.id"), index=True)
+    name: Mapped[str] = mapped_column(String)
+    # The site's `wbsc_tournament_group_id`, when the schedule payload
+    # supplied one. Nullable because 2021 has no group tagging at all and
+    # 2024's is partial; a division is still fully usable without it, it just
+    # can't attribute individual games by group.
+    source_group_id: Mapped[int | None] = mapped_column(Integer, index=True, nullable=True)
+    # Display order as published on the standings page, so the app can show
+    # divisions in the site's own order rather than alphabetically.
+    sort_order: Mapped[int] = mapped_column(Integer, default=0)
+
+    league_season: Mapped["LeagueSeason"] = relationship()
+
+
 class Team(Base):
     """Persistent team identity across years.
 
@@ -116,8 +158,16 @@ class TeamSeason(Base):
     source_team_id: Mapped[int] = mapped_column(Integer, index=True)
     display_name: Mapped[str] = mapped_column(String)
     short_code: Mapped[str | None] = mapped_column(String, nullable=True)
+    # Which regional division this team played in, for league_seasons that
+    # have any. Nullable: a single-division league_season records no
+    # divisions at all, and ~10 team_seasons across the corpus appear in
+    # fixtures without ever appearing in a published standings table.
+    division_id: Mapped[int | None] = mapped_column(
+        ForeignKey("divisions.id"), index=True, nullable=True
+    )
 
     team: Mapped["Team"] = relationship(back_populates="team_seasons")
+    division: Mapped["Division | None"] = relationship()
     league_season: Mapped["LeagueSeason"] = relationship(back_populates="team_seasons")
     player_seasons: Mapped[list["PlayerSeason"]] = relationship(back_populates="team_season")
 
@@ -219,6 +269,27 @@ class Game(Base):
     away_score: Mapped[int | None] = mapped_column(Integer, nullable=True)
     status: Mapped[str] = mapped_column(String)  # scheduled / final / postponed / cancelled
     venue: Mapped[str | None] = mapped_column(String, nullable=True)
+
+    # Which division this game counted toward. Non-null only when both teams
+    # belong to the same division — a playoff between division winners
+    # genuinely belongs to no single division, and those rows keep NULL here
+    # rather than being arbitrarily attributed to one side. Resolved from
+    # team membership by scraper/scrape_standings.py:resolve_game_divisions
+    # after divisions are known, not written by the schedule scrape itself.
+    division_id: Mapped[int | None] = mapped_column(
+        ForeignKey("divisions.id"), index=True, nullable=True
+    )
+    # The raw `wbsc_tournament_group_id` from the schedule payload, kept as
+    # the scraped fact behind division_id. Nullable for the seasons the site
+    # never tagged (all of 2021, part of 2024).
+    source_group_id: Mapped[int | None] = mapped_column(Integer, index=True, nullable=True)
+    # "regular" or "playoff". Derived in scraper/scrape_schedule.py rather
+    # than read from a single field, because no single field is reliable:
+    # playoff games usually sit on a different wbsc_tournament_round_id from
+    # the season's main one, but 2024 files 327 plainly-regular-season games
+    # on off-rounds too, so the game's own label breaks the tie in both
+    # directions. See _game_phase for the exact rule.
+    phase: Mapped[str] = mapped_column(String, default="regular", index=True)
 
     # Runners left on base, derived from the box-score payload's `gamePlays`
     # play-by-play feed (see scraper/recon/risp_lob_plan.md) — nullable since
@@ -529,6 +600,55 @@ class LeagueSeasonContext(Base):
     runs_per_win: Mapped[float | None] = mapped_column(Float, nullable=True)
     replacement_runs_per_pa: Mapped[float | None] = mapped_column(Float, nullable=True)
     replacement_fip_delta: Mapped[float | None] = mapped_column(Float, nullable=True)
+    computed_at: Mapped[dt.datetime] = mapped_column(DateTime, default=_now)
+
+
+class DivisionContext(Base):
+    """The same self-calibrated inputs as LeagueSeasonContext, computed over
+    one division's own games instead of the whole league-season.
+
+    A separate table rather than a nullable `division_id` on
+    LeagueSeasonContext, for two reasons. Practically, SQLite treats NULLs as
+    distinct in a unique index, so a `(league_season_id, division_id)` key
+    could never upsert the league-wide row — it would insert a duplicate on
+    every recompute. Conceptually, the two are genuinely different questions
+    and the app shows both: LeagueSeasonContext answers "how does this player
+    compare to the league" and stays exactly as it always was, while this
+    answers "how does this player compare to the opponents they actually
+    faced". Neither supersedes the other.
+
+    That distinction matters because divisions inside one league are not the
+    same run environment — 2026 Division 4 ranges from 11.34 runs per team
+    per game (North, league wOBA .513) to 7.52 (London, .415). Measuring
+    everyone against the pooled league mean misstates both ends. But
+    measuring everyone against their *own* division's mean instead would
+    erase the difference entirely, since a weak division's hitters would be
+    judged against weak pitching and come out looking average. Only keeping
+    both scales lets the app say which of the two effects it is showing.
+    """
+
+    __tablename__ = "division_context"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    division_id: Mapped[int] = mapped_column(
+        ForeignKey("divisions.id"), unique=True, index=True
+    )
+    lg_obp: Mapped[float | None] = mapped_column(Float, nullable=True)
+    lg_slg: Mapped[float | None] = mapped_column(Float, nullable=True)
+    lg_woba: Mapped[float | None] = mapped_column(Float, nullable=True)
+    lg_era: Mapped[float | None] = mapped_column(Float, nullable=True)
+    lg_fip: Mapped[float | None] = mapped_column(Float, nullable=True)
+    fip_constant: Mapped[float | None] = mapped_column(Float, nullable=True)
+    runs_per_pa: Mapped[float | None] = mapped_column(Float, nullable=True)
+    runs_per_win: Mapped[float | None] = mapped_column(Float, nullable=True)
+    replacement_runs_per_pa: Mapped[float | None] = mapped_column(Float, nullable=True)
+    replacement_fip_delta: Mapped[float | None] = mapped_column(Float, nullable=True)
+    # How much data this division's own calibration rests on, so the app can
+    # refuse to show a division-relative figure built on a handful of games
+    # (2026 Division 4 Central plays 36; a rain-shortened group could play
+    # far fewer). Callers check these rather than re-deriving them.
+    games: Mapped[int] = mapped_column(Integer, default=0)
+    pa: Mapped[int] = mapped_column(Integer, default=0)
     computed_at: Mapped[dt.datetime] = mapped_column(DateTime, default=_now)
 
 

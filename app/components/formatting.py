@@ -58,20 +58,26 @@ def column_config_for(df) -> dict:
 
 BATTING_COLUMN_CONFIG = _build(
     [
-        "player", "team", "league", "year", "pa", "ab", "h", "doubles", "triples", "hr", "rbi", "bb", "so", "sb",
-        "avg", "obp", "slg", "ops", "iso", "bb_pct", "k_pct", "woba", "wrc_plus", "war",
+        "player", "team", "division", "league", "year", "pa", "ab", "h", "doubles", "triples", "hr", "rbi", "bb", "so", "sb",
+        "avg", "obp", "slg", "ops", "iso", "bb_pct", "k_pct", "woba", "wrc_plus", "wrc_plus_div", "war",
         "po", "a", "e", "dp", "fpct", "avg_risp",
     ]
 )
 
 PITCHING_COLUMN_CONFIG = _build(
     [
-        "player", "team", "league", "year", "w", "l", "sv", "so", "bb", "h", "er", "ip",
-        "era", "whip", "k9", "bb9", "fip", "era_plus", "fps_pct", "war",
+        "player", "team", "division", "league", "year", "w", "l", "sv", "so", "bb", "h", "er", "ip",
+        "era", "whip", "k9", "bb9", "fip", "era_plus", "era_plus_div", "fps_pct", "war",
     ]
 )
 
-PCT_COLUMN_CONFIG = _build(["team", "w", "l", "t", "pct"])
+PCT_COLUMN_CONFIG = _build(
+    [
+        "team", "division", "w", "l", "t", "pct",
+        # division_environments' columns, shown in the same standings tab.
+        "games", "r_per_team_game", "lg_woba", "lg_era", "pa",
+    ]
+)
 
 TEAM_COLUMN_CONFIG = _build(
     [

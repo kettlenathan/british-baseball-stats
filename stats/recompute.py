@@ -1,6 +1,6 @@
 """Orchestrates the stats pipeline in dependency order: aggregation ->
-league context -> batter spray / matchups -> WAR. Safe to re-run any time
-after new games are scraped; never touches raw fact tables.
+league + division context -> batter spray / matchups -> WAR. Safe to re-run
+any time after new games are scraped; never touches raw fact tables.
 
 Usage: uv run python -m stats.recompute [--league-season-id N]
 """
@@ -13,7 +13,7 @@ from sqlalchemy.orm import Session
 from db.engine import get_session
 from db.models import LeagueSeason
 from stats.aggregation import aggregate_batting, aggregate_fielding, aggregate_pitching
-from stats.league_context import compute_league_context
+from stats.league_context import compute_division_contexts, compute_league_context
 from stats.matchups import compute_matchups
 from stats.shrinkage import compute_batting_true_talent, compute_pitching_true_talent
 from stats.spray import compute_batter_spray
@@ -28,6 +28,11 @@ def recompute_league_season(session: Session, league_season_id: int) -> None:
     # position here is arbitrary — grouped with the other aggregations.
     aggregate_fielding(session, league_season_id)
     compute_league_context(session, league_season_id)
+    # Division contexts read the same aggregated game lines and write their
+    # own table, so they only need the aggregations above — not the league
+    # context. Grouped with it because they are the same calibration at a
+    # narrower scope, and nothing downstream distinguishes their order.
+    compute_division_contexts(session, league_season_id)
     # True-talent shrinkage needs lg_woba/lg_fip from compute_league_context.
     compute_batting_true_talent(session, league_season_id)
     compute_pitching_true_talent(session, league_season_id)

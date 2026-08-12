@@ -16,6 +16,7 @@ from db.identity import refresh_display_names
 from db.models import Game
 from scraper.scrape_boxscores import scrape_boxscore
 from scraper.scrape_schedule import scrape_schedule
+from scraper.scrape_standings import scrape_standings
 
 CURRENT_YEAR = dt.date.today().year
 
@@ -77,6 +78,25 @@ def run(
                     continue
 
                 league_season_ids.append(league_season_id)
+
+                # Divisions come from a second cheap page, and must run after
+                # the schedule scrape above because they attach to the
+                # TeamSeason rows it creates. A league-season with no
+                # standings page is not an error — it just has no divisions
+                # recorded, which every consumer already treats as valid.
+                try:
+                    n_divisions = scrape_standings(
+                        code,
+                        year,
+                        session,
+                        league_season_id=league_season_id,
+                        force_refresh=force_refresh,
+                        is_current_season=is_current,
+                    )
+                    print(f"  {n_divisions} division(s) recorded")
+                except Exception as exc:
+                    print(f"  FAILED to scrape divisions for {year}-{code}: {exc}")
+
                 if since is not None:
                     windowed_ids = set(
                         session.execute(

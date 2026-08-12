@@ -9,6 +9,7 @@ response, no pagination.
 
 import datetime as dt
 import re
+from collections import Counter
 
 from sqlalchemy.orm import Session
 
@@ -32,6 +33,53 @@ def _parse_datetime(value: str | None) -> dt.datetime | None:
     if not value:
         return None
     return dt.datetime.strptime(value, "%Y-%m-%d %H:%M:%S")
+
+
+# A game's label when it is part of the regular season: "Week 12", a bare
+# round number ("12"), or the literal "Regular Season". The optional "(r)"
+# suffix marks a replayed/rescheduled fixture and does not change the phase.
+_REGULAR_LABEL_RE = re.compile(r"^\s*(week\s*\d+|\d+|regular season)\s*(\(r\))?\s*$", re.I)
+# Playoff wording as it actually appears across the corpus. "Wildcard" and
+# the abbreviated "AA SF1" / "NBL Final - Game 1" forms matter as much as the
+# obvious ones: they are exactly the labels a round-id-only rule gets right
+# and a naive "contains 'final'" rule misses.
+_PLAYOFF_LABEL_RE = re.compile(
+    r"final|qualifier|semi|quarter|championship|play-?off|wild ?card|bronze|medal"
+    r"|\bsf\d*\b|\bf\d+\b|3rd place|third place",
+    re.I,
+)
+
+
+def _modal_round_id(games: list[dict]) -> int | None:
+    """The round id carrying most of a season's games — i.e. its regular season."""
+    counts = Counter(g.get("wbsc_tournament_round_id") for g in games)
+    if not counts:
+        return None
+    return counts.most_common(1)[0][0]
+
+
+def _game_phase(gametypelabel: str | None, round_id: int | None, modal_round_id: int | None) -> str:
+    """Classify a game as "regular" or "playoff".
+
+    No single field answers this. Playoff games usually sit on a different
+    `wbsc_tournament_round_id` from the season's main one, but that rule
+    alone is wrong in both directions: 2024's Division 4 files 327 plainly
+    regular-season games on off-rounds, and 2025 files two "Week 19" games on
+    a playoff round. So the game's own label is consulted first where it is
+    unambiguous, and the round id only breaks ties.
+
+    Checked against all 5,531 scraped games: 140 classify as playoff, and
+    every distinct label in that set reads as one (Final, Semifinal,
+    Wildcard, Qualifier, Championship Series, 3rd place).
+    """
+    label = gametypelabel or ""
+    if _PLAYOFF_LABEL_RE.search(label):
+        return "playoff"
+    if _REGULAR_LABEL_RE.match(label):
+        return "regular"
+    if modal_round_id is not None and round_id != modal_round_id:
+        return "playoff"
+    return "regular"
 
 
 def _game_status(gamestatus: int, gamestatustext: str) -> str:
@@ -113,6 +161,11 @@ def scrape_schedule(
     )
     session.commit()
 
+    # Phase depends on which round holds the bulk of the season, so it can
+    # only be judged with every game in hand — hence one pass over `games`
+    # before the upsert loop rather than a per-game lookup.
+    modal_round_id = _modal_round_id(games)
+
     final_game_source_ids: list[int] = []
     for g in games:
         home_team_season_id = _upsert_team(session, league_season_id, g["homeid"], g["homelabel"], g.get("homeioc"))
@@ -133,6 +186,14 @@ def scrape_schedule(
                 "away_score": g.get("awayruns"),
                 "status": status,
                 "venue": g.get("stadium") or g.get("location"),
+                # Raw group tag as scraped. Game.division_id is resolved from
+                # team membership later (scraper/scrape_standings.py), not
+                # from this — it is absent for whole seasons, and standings
+                # covers those.
+                "source_group_id": g.get("wbsc_tournament_group_id"),
+                "phase": _game_phase(
+                    g.get("gametypelabel"), g.get("wbsc_tournament_round_id"), modal_round_id
+                ),
             },
             ["source_id"],
         )

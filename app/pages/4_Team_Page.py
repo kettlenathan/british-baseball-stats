@@ -14,6 +14,7 @@ from app.components.data_access import (
     team_catcher_throwing,
     team_fielding_by_position,
     team_position_error_players,
+    team_division,
     team_recent_games,
     team_roster,
     team_season_stats,
@@ -43,6 +44,20 @@ if roster_df.empty:
 
 teams = sorted(roster_df["team"].unique())
 team = st.selectbox("Team", teams)
+
+division_info = team_division(league_season_id, team)
+if division_info:
+    placing = (
+        f"{division_info['rank']} of {division_info['of']}"
+        if division_info["rank"]
+        else "unplaced"
+    )
+    st.caption(
+        f"**{division_info['division']}** division — {placing} on regular-season record. "
+        "Every league game below was played inside this division, so the record and "
+        "rate stats describe this opposition only and are not comparable with another "
+        "division's without adjustment."
+    )
 
 st.subheader("Team stats")
 stats_df = team_season_stats(league_season_id)

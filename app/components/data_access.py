@@ -17,6 +17,8 @@ from db.models import (
     BattingSeasonStats,
     BattingTrueTalent,
     BattingWar,
+    Division,
+    DivisionContext,
     FieldingSeasonStats,
     Game,
     League,
@@ -117,15 +119,144 @@ def _lg_context(session, league_season_id: int):
     ).scalar_one_or_none()
 
 
+def _division_contexts(session, league_season_id: int) -> dict[int, DivisionContext]:
+    """Every division context in this league_season, keyed by division id.
+
+    Fetched in one query and handed around rather than looked up per player:
+    a leaderboard row needs its own division's baseline, and per-row lookups
+    would issue one query per player.
+    """
+    return {
+        ctx.division_id: ctx
+        for ctx in session.execute(
+            select(DivisionContext)
+            .join(Division, Division.id == DivisionContext.division_id)
+            .where(Division.league_season_id == league_season_id)
+        ).scalars()
+    }
+
+
+def _division_names(session, league_season_id: int) -> dict[int, str]:
+    return {
+        row.id: row.name
+        for row in session.execute(
+            select(Division).where(Division.league_season_id == league_season_id)
+        ).scalars()
+    }
+
+
+@st.cache_data
+def list_divisions(league_season_id: int) -> pd.DataFrame:
+    """The divisions in one league_season, in the site's own published order.
+
+    Returns an empty frame for a league_season with none recorded — 2021's
+    NBL genuinely had one undivided table, and callers use "is this empty"
+    to decide whether to offer a division control at all rather than
+    showing a pointless single-option dropdown.
+    """
+    session = get_session()
+    try:
+        rows = session.execute(
+            select(
+                Division.id.label("division_id"),
+                Division.name,
+                Division.sort_order,
+                func.count(func.distinct(TeamSeason.id)).label("teams"),
+            )
+            .outerjoin(TeamSeason, TeamSeason.division_id == Division.id)
+            .where(Division.league_season_id == league_season_id)
+            .group_by(Division.id)
+            .order_by(Division.sort_order)
+        ).all()
+        return pd.DataFrame(rows, columns=["division_id", "division", "sort_order", "teams"])
+    finally:
+        session.close()
+
+
+@st.cache_data
+def division_environments(league_season_id: int) -> pd.DataFrame:
+    """Each division's run environment beside the league-wide one.
+
+    This is the evidence for why the app carries two baselines at all: in
+    2026 Division 4 these range from 11.34 runs per team per game down to
+    7.52. Presented as a table rather than folded into a single "adjusted"
+    number on purpose — the difference between divisions mixes run
+    environment with genuine quality, and nothing here can separate the two.
+    """
+    session = get_session()
+    try:
+        rows = session.execute(
+            select(
+                Division.name,
+                DivisionContext.games,
+                DivisionContext.pa,
+                DivisionContext.lg_woba,
+                DivisionContext.lg_era,
+                DivisionContext.runs_per_pa,
+            )
+            .join(DivisionContext, DivisionContext.division_id == Division.id)
+            .where(Division.league_season_id == league_season_id)
+            .order_by(Division.sort_order)
+        ).all()
+        df = pd.DataFrame(
+            rows, columns=["division", "games", "pa", "lg_woba", "lg_era", "runs_per_pa"]
+        )
+        if df.empty:
+            return df
+
+        # Runs per team per game is the readable form of this, and it is what
+        # the scoping numbers above quote — derive it from the games actually
+        # counted rather than storing a second, redundant column.
+        runs = session.execute(
+            select(
+                Division.name,
+                func.sum(Game.home_score + Game.away_score),
+                func.count(Game.id),
+            )
+            .join(Game, Game.division_id == Division.id)
+            .where(
+                Division.league_season_id == league_season_id,
+                Game.status == "final",
+                Game.phase == "regular",
+            )
+            .group_by(Division.id)
+        ).all()
+        per_game = {
+            name: (total or 0) / (2 * count) if count else None for name, total, count in runs
+        }
+        df["r_per_team_game"] = df["division"].map(per_game)
+        return df[["division", "games", "r_per_team_game", "lg_woba", "lg_era", "pa"]]
+    finally:
+        session.close()
+
+
 @st.cache_data
 def batting_leaderboard(league_season_id: int, min_pa: int = 0) -> pd.DataFrame:
+    """One row per batter, carrying wRC+ against *both* baselines.
+
+    `wrc_plus` compares the hitter to the whole competition; `wrc_plus_div`
+    compares them to the division they actually played in. Neither is the
+    "true" figure — a hitter in a weak division is flattered by the first and
+    penalised by the second, and only showing both makes that visible. The
+    division column is included so a page can filter or group without a
+    second query.
+    """
     session = get_session()
     try:
         ctx = _lg_context(session, league_season_id)
         lg_woba = ctx.lg_woba if ctx else None
+        div_contexts = _division_contexts(session, league_season_id)
+        div_names = _division_names(session, league_season_id)
 
         rows = session.execute(
-            select(BattingSeasonStats, Player.display_name, TeamSeason.display_name, BattingWar.war, BattingWar.woba)
+            select(
+                BattingSeasonStats,
+                Player.display_name,
+                TeamSeason.display_name,
+                BattingWar.war,
+                BattingWar.woba,
+                TeamSeason.division_id,
+            )
             .join(PlayerSeason, PlayerSeason.id == BattingSeasonStats.player_season_id)
             .join(Player, Player.id == PlayerSeason.player_id)
             .join(TeamSeason, TeamSeason.id == PlayerSeason.team_season_id)
@@ -134,12 +265,14 @@ def batting_leaderboard(league_season_id: int, min_pa: int = 0) -> pd.DataFrame:
         ).all()
 
         records = []
-        for stats_row, full_name, team_name, war, player_woba in rows:
+        for stats_row, full_name, team_name, war, player_woba, division_id in rows:
             rate = batting_rate_stats(stats_row)
+            div_ctx = div_contexts.get(division_id)
             records.append(
                 {
                     "player": full_name,
                     "team": team_name,
+                    "division": div_names.get(division_id),
                     "pa": stats_row.pa,
                     "ab": stats_row.ab,
                     "h": stats_row.h,
@@ -153,6 +286,7 @@ def batting_leaderboard(league_season_id: int, min_pa: int = 0) -> pd.DataFrame:
                     **rate,
                     "woba": player_woba,
                     "wrc_plus": wrc_plus(player_woba, lg_woba),
+                    "wrc_plus_div": wrc_plus(player_woba, div_ctx.lg_woba) if div_ctx else None,
                     "war": war,
                     "po": stats_row.field_po,
                     "a": stats_row.field_a,
@@ -173,9 +307,18 @@ def pitching_leaderboard(league_season_id: int, min_ip: float = 0) -> pd.DataFra
     try:
         ctx = _lg_context(session, league_season_id)
         lg_era = ctx.lg_era if ctx else None
+        div_contexts = _division_contexts(session, league_season_id)
+        div_names = _division_names(session, league_season_id)
 
         rows = session.execute(
-            select(PitchingSeasonStats, Player.display_name, TeamSeason.display_name, PitchingWar.war, PitchingWar.fip)
+            select(
+                PitchingSeasonStats,
+                Player.display_name,
+                TeamSeason.display_name,
+                PitchingWar.war,
+                PitchingWar.fip,
+                TeamSeason.division_id,
+            )
             .join(PlayerSeason, PlayerSeason.id == PitchingSeasonStats.player_season_id)
             .join(Player, Player.id == PlayerSeason.player_id)
             .join(TeamSeason, TeamSeason.id == PlayerSeason.team_season_id)
@@ -184,14 +327,16 @@ def pitching_leaderboard(league_season_id: int, min_ip: float = 0) -> pd.DataFra
         ).all()
 
         records = []
-        for stats_row, full_name, team_name, war, player_fip in rows:
+        for stats_row, full_name, team_name, war, player_fip, division_id in rows:
             rate = pitching_rate_stats(stats_row)
             if rate["ip"] < min_ip:
                 continue
+            div_ctx = div_contexts.get(division_id)
             records.append(
                 {
                     "player": full_name,
                     "team": team_name,
+                    "division": div_names.get(division_id),
                     "w": stats_row.wins,
                     "l": stats_row.losses,
                     "sv": stats_row.saves,
@@ -204,6 +349,7 @@ def pitching_leaderboard(league_season_id: int, min_ip: float = 0) -> pd.DataFra
                     "fps_pct": fps_pct(stats_row.fps_strikes, stats_row.fps_pa),
                     "fip": player_fip,
                     "era_plus": era_plus(rate["era"], lg_era),
+                    "era_plus_div": era_plus(rate["era"], div_ctx.lg_era) if div_ctx else None,
                     "war": war,
                 }
             )
@@ -362,18 +508,52 @@ def team_roster(league_season_id: int) -> pd.DataFrame:
 
 
 @st.cache_data
-def standings(league_season_id: int) -> pd.DataFrame:
-    """Computed from games (source-of-truth facts), not scraped directly."""
+def standings(league_season_id: int, regular_season_only: bool = True) -> pd.DataFrame:
+    """Computed from games (source-of-truth facts), not scraped directly.
+
+    Carries a `division` column so the page can present the table the way
+    the site itself does — one block per division. That grouping is not
+    cosmetic: teams in different divisions play disjoint schedules, so
+    ranking them in a single list by win percentage compares records built
+    against opposition that never overlapped.
+
+    Playoff games are excluded by default, since a league table is a record
+    of the regular season and including them would credit a deep playoff run
+    as extra league wins.
+    """
     session = get_session()
     try:
-        games = session.execute(
-            select(Game).where(Game.league_season_id == league_season_id, Game.status == "final")
-        ).scalars().all()
-        team_names = {
-            ts.id: ts.display_name
-            for ts in session.execute(select(TeamSeason).where(TeamSeason.league_season_id == league_season_id)).scalars()
+        query = select(Game).where(
+            Game.league_season_id == league_season_id, Game.status == "final"
+        )
+        if regular_season_only:
+            query = query.where(Game.phase == "regular")
+        games = session.execute(query).scalars().all()
+
+        divisions = {
+            d.id: (d.name, d.sort_order)
+            for d in session.execute(
+                select(Division).where(Division.league_season_id == league_season_id)
+            ).scalars()
         }
-        records = {ts_id: {"team": name, "w": 0, "l": 0, "t": 0} for ts_id, name in team_names.items()}
+        team_seasons = session.execute(
+            select(TeamSeason).where(TeamSeason.league_season_id == league_season_id)
+        ).scalars().all()
+        records = {
+            ts.id: {
+                "team": ts.display_name,
+                "division": divisions.get(ts.division_id, (None, None))[0],
+                # Sorted on, then dropped: division blocks must appear in the
+                # site's published order, not ordered by whichever division
+                # happens to contain the best record. Teams with no division
+                # sort last.
+                "_division_sort": divisions.get(ts.division_id, (None, 10**6))[1],
+                "w": 0,
+                "l": 0,
+                "t": 0,
+            }
+            for ts in team_seasons
+        }
         for g in games:
             if g.home_score is None or g.away_score is None:
                 continue
@@ -390,7 +570,50 @@ def standings(league_season_id: int) -> pd.DataFrame:
         if df.empty:
             return df
         df["pct"] = df["w"] / (df["w"] + df["l"] + df["t"]).replace(0, pd.NA)
-        return df.sort_values("pct", ascending=False)
+        return (
+            df.sort_values(["_division_sort", "pct"], ascending=[True, False])
+            .drop(columns=["_division_sort"])
+            .reset_index(drop=True)
+        )
+    finally:
+        session.close()
+
+
+@st.cache_data
+def team_division(league_season_id: int, team_name: str) -> dict | None:
+    """Which division a team played in, and how that division scored.
+
+    Returns None when the league-season records no divisions, or the team
+    isn't in one. `rank`/`of` place the team within its own division rather
+    than the whole league, which is the only ranking its schedule supports.
+    """
+    session = get_session()
+    try:
+        row = session.execute(
+            select(Division.name, Division.id, DivisionContext)
+            .join(TeamSeason, TeamSeason.division_id == Division.id)
+            .outerjoin(DivisionContext, DivisionContext.division_id == Division.id)
+            .where(
+                TeamSeason.league_season_id == league_season_id,
+                TeamSeason.display_name == team_name,
+            )
+        ).first()
+        if row is None:
+            return None
+        name, _division_id, ctx = row
+
+        table = standings(league_season_id)
+        in_division = table[table["division"] == name].reset_index(drop=True)
+        position = in_division.index[in_division["team"] == team_name]
+
+        return {
+            "division": name,
+            "rank": int(position[0]) + 1 if len(position) else None,
+            "of": len(in_division),
+            "lg_woba": ctx.lg_woba if ctx else None,
+            "lg_era": ctx.lg_era if ctx else None,
+            "games": ctx.games if ctx else 0,
+        }
     finally:
         session.close()
 
