@@ -14,6 +14,7 @@ from app.components.data_access import (
     team_catcher_throwing,
     team_fielding_by_position,
     team_position_error_players,
+    team_division,
     team_recent_games,
     team_roster,
     team_season_stats,
@@ -43,6 +44,66 @@ if roster_df.empty:
 
 teams = sorted(roster_df["team"].unique())
 team = st.selectbox("Team", teams)
+
+division_info = team_division(league_season_id, team)
+if division_info:
+    placing = (
+        f"{division_info['rank']} of {division_info['of']}"
+        if division_info["rank"]
+        else "unplaced"
+    )
+    st.caption(
+        f"**{division_info['division']}** division — {placing} on regular-season record. "
+        "Every league game below was played inside this division, so the record and "
+        "rate stats describe this opposition only and are not comparable with another "
+        "division's without adjustment."
+    )
+
+    if division_info.get("rating") is not None:
+        rating_col, sos_col, expected_col = st.columns(3)
+        rating_col.metric(
+            "Strength rating",
+            f"{division_info['rating']:+.2f}",
+            help=(
+                "Bradley-Terry estimate accounting for who this team actually played. "
+                "0 is a division-average team. Comparable within this division only."
+            ),
+        )
+        sos = division_info["sos"]
+        sos_col.metric(
+            "Strength of schedule",
+            f"{sos:+.2f}",
+            # Framed as easier/harder rather than good/bad: a soft draw is not
+            # a failing, and Streamlit's own red/green delta arrows would imply
+            # a judgement the number doesn't carry.
+            delta="harder draw" if sos > 0 else "easier draw",
+            delta_color="off",
+            help=(
+                "How much stronger the opponents faced were than an even draw inside this "
+                "division would have given. Negative means an easier run than the "
+                "schedule alone suggests."
+            ),
+        )
+        expected_col.metric(
+            "Expected win %",
+            f"{division_info['expected_win_pct']:.1%}",
+            help="Against an average opponent from this division, at a neutral venue.",
+        )
+
+        left = division_info.get("games_remaining") or 0
+        if left:
+            run_in = division_info.get("sos_remaining")
+            run_in_text = (
+                f" Their remaining opponents rate {run_in:+.2f} against an even draw"
+                f" — {'a harder' if run_in > 0 else 'an easier'} run-in than the season so far."
+                if run_in is not None
+                else ""
+            )
+            st.caption(
+                f"⚠️ **Season in progress** — {left} league fixture"
+                f"{'s' if left != 1 else ''} still to play, so the record and rating above "
+                f"are a snapshot rather than a final standing.{run_in_text}"
+            )
 
 st.subheader("Team stats")
 stats_df = team_season_stats(league_season_id)

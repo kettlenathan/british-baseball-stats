@@ -52,6 +52,10 @@ def _team_final_games(session: Session, team_season_id: int) -> list[Game]:
             select(Game)
             .where(
                 Game.status == "final",
+                # Forfeits and result-only games have no pitchers to find,
+                # and would otherwise shift the recency window's anchor to a
+                # date on which nobody took the mound.
+                Game.result_type == "played",
                 (Game.home_team_season_id == team_season_id) | (Game.away_team_season_id == team_season_id),
             )
             .order_by(Game.game_date)

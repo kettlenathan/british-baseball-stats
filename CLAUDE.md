@@ -25,6 +25,16 @@ uv run python -m scraper.pipeline --leagues nbl --years 2026
 uv run python -m scraper.pipeline --leagues nbl,d2 --years 2024-2026 --force-refresh
 uv run python -m stats.recompute --league-season-id N   # omit flag to recompute all
 uv run python -m scripts.refresh_data --leagues nbl --years 2026   # scrape + recompute in one shot
+
+# Backfill divisions/game phase for already-scraped seasons. Replays cached
+# schedule + standings responses from data/raw_cache — no network, so it is safe
+# to run against a database that is about to be published.
+uv run python -m scripts.backfill_divisions
+uv run python -m scripts.backfill_divisions --allow-fetch   # fetch anything not cached
+
+# Does the Bradley-Terry rating beat a plain win-% baseline? Re-run before
+# changing stats/team_strength.py.
+uv run python -m scripts.validate_strength
 uv run python -m scripts.refresh_data --leagues nbl --years 2026 --last-week   # mid-season: only recent games
 
 # DB schema migrations (Alembic; models.py is the source of truth)
@@ -55,7 +65,30 @@ writes back upstream.
   this to build their fetch URL while persisting under the canonical code.
 - `scrape_schedule.py` — one fetch of a competition-year's `schedule-and-results` page yields
   the full season's games in one response (no pagination) — populates
-  League/Season/LeagueSeason/Team/TeamSeason/Game.
+  League/Season/LeagueSeason/Team/TeamSeason/Game. Each game also carries
+  `wbsc_tournament_group_id` (stored as `Game.source_group_id`) and a derived
+  `Game.phase` of `"regular"` or `"playoff"`. Phase is derived by `_game_phase` rather than
+  read from any single field, because no single field is reliable: playoff games *usually*
+  sit on a different `wbsc_tournament_round_id` from the season's main one, but 2024's
+  Division 4 files 327 plainly regular-season games on off-rounds and 2025 files two
+  "Week 19" games on a playoff round, so the game's own `gametypelabel` is consulted first
+  where it is unambiguous and the round id only breaks ties. Verified across all 5,531
+  scraped games: 140 classify as playoff and every distinct label in that set reads as one.
+- `scrape_standings.py` — the authoritative source for **which regional division** a team
+  played in, and the division's published name. Plain server-rendered HTML rather than an
+  Inertia blob: one `<div class="box-container">` per division holding an `<h3>` name and a
+  table of team links carrying the site's own `teamid`. Membership is matched by *id*, never
+  by name — the two pages spell the same club differently ("Leeds Locos" on standings vs
+  "Leeds Locos 1" in the schedule), so name matching drops teams silently. This page is used
+  in preference to the schedule's group id because it covers **every** scraped league-season
+  including 2021, whereas the group id is absent for all of 2021 and partial for 2024;
+  measured coverage is 426 of 436 team_seasons. It must run *after* `scrape_schedule` for the
+  same competition-year, since it attaches divisions to the `TeamSeason` rows that creates.
+  Its `resolve_game_divisions` then sets `Game.division_id` only where **both** teams share a
+  division, so a playoff between division winners belongs to neither rather than being
+  attributed to the home side. Writes are delete-then-reassign per league-season (like
+  `FieldingGameLine`), so a re-run after the site edits its groupings converges instead of
+  accumulating stale rows.
 - `scrape_boxscores.py` — one fetch per *final* game. Box score records carry batting,
   pitching, and fielding fields together on the same record (two-way players have both
   non-zero); records are grouped by `playerid` and summed before upserting, since
@@ -105,14 +138,57 @@ writes back upstream.
   existing SQLite file. `db.engine.create_all()` (create-from-models) is for tests/dev only.
 - Three layers of tables, in comments in `models.py`:
   1. **Dimensions** — League/Season/LeagueSeason (one league's instance in one year),
-     Team/TeamSeason (a team's participation in one league_season — this is what the site's
-     own `teamid` actually identifies), Player/PlayerSeason.
+     Division (a regional grouping within one league_season), Team/TeamSeason (a team's
+     participation in one league_season — this is what the site's own `teamid` actually
+     identifies), Player/PlayerSeason.
   2. **Facts** — Game, BattingGameLine, PitchingGameLine, PlateAppearance, FieldingGameLine —
      written only by `scraper/`.
   3. **Derived/materialized** — BattingSeasonStats, PitchingSeasonStats, FieldingSeasonStats,
      LeagueSeasonContext, BattingWar, PitchingWar, BatterSpraySeasonStats,
      BatterPitcherMatchup — written only by `stats/`, safe to drop and rebuild at any time
      from fact rows.
+- **A game supplies a result and a box score independently**, and this league separates them
+  constantly, which is what `Game.result_type` records (`"played"` / `"forfeit"` /
+  `"result_only"`, NULL unless `status == "final"`). Reading `gamestatustext.startswith("F")`
+  alone — the original rule — silently discarded **588 games that produced a real competitive
+  result**: 372 forfeits (`gamestatus` 4, blank text, 7-0 or 0-7, zero innings, no line score)
+  and 216 result-only games (`gamestatus` 3, blank text, a real score like 14-8, but zero
+  innings, no line score, no hits — contested, with no scoresheet ever entered). The
+  federation counts both: including them lifts exact agreement with the site's *own published
+  standings* from 121 of 436 team-seasons to 231, and reproduces 2026 Division 3 Central
+  exactly (Milton Keynes 20-0, Oxford 12-10, Cambridge 10-10), which the old rule got wrong
+  for four of its five teams. The discriminator is the **absence of any record of play**
+  (zero innings *and* an empty line score — 99.9% of played finals carry both), not the score
+  pattern, so a genuine 7-0 that went the distance is still `"played"`. Consequences to
+  preserve: records, standings and Bradley-Terry ratings count all three types; **runs,
+  rates, run environments and probable pitchers must filter `result_type == "played"`**, or
+  every forfeit injects a phantom 7-0 into the league averages; and `scrape_schedule` only
+  queues `"played"` games for box-score fetching, since asking for a forfeit's scoresheet
+  spends a rate-limited request to find nothing.
+- **Divisions.** During the regular season teams play *only* within their own regional
+  division, so a league table that ranks every team together compares records built against
+  disjoint opposition. Across all five leagues in 2026 there were 1,231 regular-season games
+  and **zero** between divisions — the only cross-division games in the whole corpus are 268
+  regular-season ones from 2021-2025 (mostly 2022-2024 Division 4) plus 76 playoff games, 344
+  in total, which are the natural held-out test set for any future cross-division strength
+  model. `Division` is deliberately scoped to one league_season, unlike `Team` and `Player`:
+  the site provides no year-spanning division identity and the names cannot supply one — the
+  same regional grouping is published as `AA - Central` (2021), `South A` (2022), `South`
+  (2023), `A` (2024, 2025) and `North` (2026), and names are reused for *different* regions in
+  different years, so matching by name would join unrelated groupings. Division counts churn
+  too (the NBL was one undivided table 2021-2025 and splits North/South for the first time in
+  2026; Division 2 has gone 2→3→1→2→3→2 over six years), so every consumer must handle a
+  league_season with one division or none. **There is no promotion or relegation in these
+  leagues** — teams sign up to whichever league they please each year and frequently disband,
+  re-form or rejoin under a different name, which is the actual cause of that churn. Two
+  consequences: a league code is a self-selected entry level rather than an enforced skill
+  tier, so never assume `nbl` > `d2` > … implies relative strength; and cross-year `Team`
+  identity (matched on `name`, see `db/upsert.py`) is unreliable, since a renamed
+  continuation becomes a new `Team` row — 60 of 160 teams appear in only one year. Anything
+  pooling across seasons should lean on player-level links rather than team continuity. ~10 team_seasons appear in fixtures but never in a
+  published standings table and keep a NULL `division_id`; they are surfaced in the UI under
+  "Not in a published division" rather than dropped, the same principle as the `"UNK"`
+  fielding position.
 - `FieldingGameLine` is a per-position *breakdown* of the fielding totals `BattingGameLine`
   stores for the same player-game (which stay as they are): summing its rows reproduces those
   totals exactly for every player who has a batting row, so a by-position view can never
@@ -195,7 +271,25 @@ writes back upstream.
   FIP additive constant (solved per league-season so lgFIP == lgERA that season), and the
   runs-per-win conversion (scaled from a 10-runs=1-win reference by this league's own actual
   runs/game) are all computed from this league's own scraped data, season by season — this
-  is what makes WAR reflect this league's real environment rather than assuming MLB's. Pull
+  is what makes WAR reflect this league's real environment rather than assuming MLB's.
+  Computed at **two scopes**, and the app shows both: `LeagueSeasonContext` (every team in the
+  competition, pooled — unchanged from when it was the only scope) and `DivisionContext` (one
+  division's own games). Both go through one set of formulas (`_context_values`) precisely so
+  a division's context is provably the same calibration over a narrower slice rather than a
+  second implementation that can drift. They are separate *tables* rather than one table with
+  a nullable `division_id` for two reasons: SQLite treats NULLs as distinct in a unique index,
+  so a `(league_season_id, division_id)` key could never upsert the league-wide row; and they
+  answer genuinely different questions, so neither supersedes the other. Divisions inside one
+  league are not the same run environment — 2026 Division 4 ranges from 11.34 runs per team
+  per game (North, lgwOBA .513) to 7.52 (London, .415), a 98-point spread — so a pooled mean
+  misstates both ends. **But normalizing everyone to their own division would erase the very
+  gap you want to measure**, since a weak division's hitters face weak pitching and come out
+  looking average; only keeping both scales lets the app say which effect it is showing. That
+  is why the leaderboards carry `wrc_plus` *and* `wrc_plus_div` side by side rather than one
+  "adjusted" number. Division totals are summed from *game lines* joined to `Game`, filtered
+  to `division_id` **and** `phase == "regular"`: both halves are needed, since `division_id`
+  alone would keep a playoff between two teams of the same division while dropping one between
+  different divisions, making a division's environment depend on how the bracket fell. Pull
   tendency (below) deliberately does *not* follow this self-calibrated philosophy — a real
   ballpark's foul lines don't move with the league's own batted-ball distribution.
 - `spray.py` — buckets each batter's batted balls into pull/center/oppo against **fixed**
@@ -209,6 +303,36 @@ writes back upstream.
   `app/pages/3_Player_Page.py`'s tendency/spray-chart/matchup sections; career values are
   summed across these season rows at read time in `app/components/data_access.py`, not
   stored separately.
+- `team_strength.py` — Bradley-Terry team ratings, because a win-loss record is not
+  comparable even *within* a division: schedules are unbalanced (2026 D3 Central's Milton
+  Keynes played the bottom team 6× and second-placed Cambridge 2×, while Cambridge played the
+  bottom team 6× and Milton Keynes 2×). Fitted on outcomes, **not run margin** — margins here
+  are blowout-heavy (median 6 runs, 33% of games decided by 10+, max 38) *and* censored by
+  mercy rules, so a rout records when the game was halted rather than how one-sided it was;
+  fitting that as a clean continuous signal would give confident wrong answers. The fit is
+  L2-penalised because an undefeated team (Milton Keynes went 18-0) has no finite
+  unpenalised MLE, with λ chosen by 5-fold CV on this league-season's own games and a fixed
+  fallback below `MIN_GAMES_FOR_CV`, recorded per row as `lambda_self_calibrated` exactly like
+  `shrinkage.py`'s `k`. Home advantage enters as the (unpenalised) intercept, fitted once per
+  league-season since a 4-team division can't estimate it — it comes out at 0.119 log-odds,
+  matching the measured 53.5% raw home win rate. **`rating` is comparable only within one
+  division**: divisions play no regular-season games against each other, so nothing fixes
+  their relative level and each division is centred on its own mean; comparing across
+  divisions would assert they are equally strong, which is the open question. `sos` is
+  measured against a *balanced-draw baseline* (mean rating of the division's other teams),
+  not as a bare mean opponent rating — under a bare mean a team never plays itself, so the
+  best team in any division automatically looks like it had the easiest schedule, which would
+  corrupt the exact comparison this exists for. Core fit is DB-free like `lineup.py`.
+  `scripts/validate_strength.py` is the held-out-game harness: the rating beats a win-%
+  baseline by only 0.7% log loss overall, but that is +0.003 where schedules are balanced
+  against +0.011 (2.2%) where they are skewed — the honest case is that it costs nothing when
+  the record is already fair and corrects it when it isn't, not that it predicts better on
+  average. Re-run it before changing the model. The fit also reports **`games_remaining` and
+  `sos_remaining`** from the published fixture list: the site posts the whole schedule up
+  front, so mid-season a rating is explicitly a snapshot (2026's leagues sit around 85-90%
+  complete) and the difficulty of the run-in is knowable — in 2026 D3 Central, Oxford Kings
+  face a -1.27 remaining SOS while Cambridge face +0.60. Scheduled fixtures never influence
+  the ratings themselves; only results can.
 - `war.py` — simplified batting/pitching WAR. **It is offense-only / FIP-only: there is no
   defensive component at all.** The box-score play-by-play does carry a coarse batted-ball
   proxy (pull direction, distance, ground/fly/line/pop type — `PlateAppearance`, used for
@@ -279,6 +403,17 @@ writes back upstream.
   set via the Community Cloud dashboard, never committed. `Home.py` uses it to decide whether
   to include the Data Admin page in navigation at all; `9_Data_Admin.py` also checks it
   directly as defense in depth.
+- Division-aware presentation: `filters.py`'s `division_selector` renders nothing at all when
+  a league_season has fewer than two divisions (a season that was never split has no
+  meaningful choice to offer), and `filter_by_division` narrows a frame in pandas rather than
+  in SQL so switching divisions doesn't invalidate the `@st.cache_data` frame — one query
+  serves every division. The Leaderboards standings tab renders one table per division in the
+  site's published `sort_order` (not ordered by whichever division holds the best record) and
+  says plainly in a caption that records in different blocks were built against different
+  opposition. Wherever `wrc_plus`/`wrc_plus_div` (or the ERA+ pair) appear together, a caption
+  states that neither is the truer number and that a large gap means the division's run
+  environment is unusual, not that the player is mis-rated — without it a reader assumes the
+  smaller number is a correction of the larger. Keep that framing if these sections change.
 - `app/components/data_access.py` holds all `@st.cache_data`-wrapped DB-query functions
   returning pandas DataFrames. This layer only *displays* what `stats/` already derived —
   sabermetric formulas are never reimplemented or recomputed here, only read and formatted

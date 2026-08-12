@@ -30,6 +30,143 @@ st.markdown(
 
 st.divider()
 
+st.subheader("Divisions, and why two versions of wRC+ are shown")
+st.markdown(
+    "Most of these leagues are split into **regional divisions** — 2026's Division 3 runs "
+    "North, Central, South and SWWBL — and during the regular season a team plays *only* "
+    "the other teams in its own division. Across all five leagues in 2026 there were 1,231 "
+    "regular-season games and **not one** of them was between divisions."
+)
+st.markdown(
+    "That has a consequence worth being blunt about: **two teams in different divisions have "
+    "no games in common**, so their records cannot be directly compared. In 2026 the Milton "
+    "Keynes Bucks went 18-0 in Division 3 Central while the London Meteors went 19-5 in "
+    "Division 3 South, and the two never met. Nothing on this site currently tells you which "
+    "of those is the better record, because the games needed to answer that were never "
+    "played. League tables are therefore shown one division at a time rather than as a single "
+    "ranked list."
+)
+st.markdown(
+    "Divisions also differ a lot in how much scoring happens in them. In 2026's Division 4, "
+    "the North division averaged **11.34 runs per team per game** and the London division "
+    "**7.52** — a league-average wOBA of .513 against .415, inside the same competition. "
+    "So the leaderboards show two versions of the same comparison:"
+)
+st.markdown(
+    "- **wRC+** (and **ERA+**) measures a player against the whole competition — every team "
+    "in that league and season, pooled.\n"
+    "- **wRC+ vs Div** (and **ERA+ vs Div**) measures them against their own division only — "
+    "the opposition they actually faced."
+)
+st.markdown(
+    "**Neither one is the truer number.** The league-wide version compares a player against "
+    "opponents they never played. The division version compares them against the opponents "
+    "they did play, but against a bar that may itself be unusually high or low. A large gap "
+    "between the two means that player's division had an unusual run environment — not that "
+    "the player is over- or under-rated."
+)
+st.markdown(
+    "In particular, the division figure **cannot** tell you which division is stronger. A "
+    "low-scoring division might have better pitching or weaker hitting, and its own games "
+    "alone can never separate those two explanations. Working out relative division strength "
+    "needs evidence that links divisions together — players who appear in more than one, or "
+    "the handful of cross-division games in earlier seasons — and that is not yet built."
+)
+st.markdown(
+    "Divisions are read from the source site's own standings page, which covers every season "
+    "back to 2021. They are treated as belonging to a single season rather than persisting "
+    "across years, because the source gives no stable identity for them: the same regional "
+    "grouping is published as `AA - Central` in 2021, `South A` in 2022, `South` in 2023, `A` "
+    "in 2024 and `North` in 2026, and the same name is reused for different regions in "
+    "different years. A small number of teams appear in the fixture list but in no published "
+    "standings table; they're shown under **Not in a published division** rather than being "
+    "assigned to one by guesswork."
+)
+st.markdown(
+    "Playoff games are separated from regular-season games and excluded from league tables "
+    "and from each division's run-environment figures. A playoff between two division winners "
+    "belongs to neither division, and counting the ones that happen to be intra-division "
+    "would make a division's numbers depend on how the bracket fell."
+)
+
+st.divider()
+
+st.subheader("Team strength rating and strength of schedule")
+st.markdown(
+    "Even inside a single division, schedules aren't balanced. In 2026's Division 3 Central, "
+    "Milton Keynes played bottom-placed Essex Archers four times and second-placed Cambridge "
+    "Sovereigns only twice — while Cambridge played Essex **six** times and Milton Keynes "
+    "twice. Two records built on schedules like that aren't quite measuring the same thing."
+)
+st.markdown(
+    "The **Rating** column estimates each team's strength from *who they actually played*, "
+    "using a Bradley-Terry model — the standard approach for ranking from head-to-head "
+    "results. It's on a log-odds scale where **0 is a division-average team**; +1 means "
+    "beating that average team about 73% of the time at a neutral venue. **SOS** is how much "
+    "harder the schedule was than an even draw within the same division would have been, so "
+    "a negative SOS means an easier run than the raw record suggests."
+)
+st.markdown(
+    "Two deliberate choices. The rating uses **only who won**, not the score — run margins in "
+    "this league are dominated by blowouts (a third of games are decided by 10 or more) and "
+    "are cut short by mercy rules, so a big margin often records when a game was stopped "
+    "rather than how one-sided it was. And the estimate is **pulled toward the division "
+    "average**, more so for teams with few games, which is also what stops an undefeated "
+    "record producing an infinite rating."
+)
+st.markdown(
+    "SOS is measured against a balanced draw rather than as a simple average of opponents "
+    "faced, because a team never plays itself: under a simple average the best team in any "
+    "division would automatically appear to have had the easiest schedule, which is an "
+    "artefact rather than a finding."
+)
+st.markdown(
+    "**These ratings compare teams within one division only.** Divisions play no "
+    "regular-season games against each other, so each division's ratings are centred on its "
+    "own average, and a +1.5 in one division does not mean the same thing as a +1.5 in "
+    "another. Comparing them across divisions would assume the divisions are equally strong, "
+    "which is the question, not the answer."
+)
+st.markdown(
+    "Tested by holding out games and predicting them: the rating beats ranking teams by win "
+    "percentage by a small margin overall (0.7% on log loss), and that margin is "
+    "concentrated in the teams with lopsided schedules, where it is around three and a half "
+    "times larger. Where a schedule is already balanced, the rating and the raw record agree "
+    "— which is the point. Both are far better than guessing or than always picking the home "
+    "team."
+)
+
+st.divider()
+
+st.subheader("Forfeits, unscored games, and seasons still in progress")
+st.markdown(
+    "Not every result on the record came from a game that was played. Two kinds turn up "
+    "throughout this data:"
+)
+st.markdown(
+    "- **Forfeits** — awarded 7-0 without anyone taking the field.\n"
+    "- **Result-only games** — genuinely contested, with a real score like 14-8 recorded, "
+    "but no scoresheet ever entered, so there are no innings, no line score and no player "
+    "statistics."
+)
+st.markdown(
+    "Both count toward **records and standings**, matching the federation's own published "
+    "tables — 588 such games across the seasons here. Neither counts toward **runs, rate "
+    "stats or a division's scoring environment**, because no runs were actually scored in a "
+    "forfeit and no at-bats were recorded in either. A team's runs per game is therefore per "
+    "game *played*, which can be fewer than the games in its win-loss record."
+)
+st.markdown(
+    "Separately: the source site publishes each season's **full fixture list in advance**, so "
+    "where a season is still running the app can say how much of it has happened rather than "
+    "presenting a partial table as if it were final. Standings and ratings for a live season "
+    "are a snapshot of games played to date, and team pages show how many fixtures remain "
+    "and whether the run-in is harder or easier than the season so far. Scheduled games never "
+    "affect a rating — only results do."
+)
+
+st.divider()
+
 st.subheader("Following a player across seasons")
 st.markdown(
     "The source site issues a **new player ID every season** — the same player on the same "
