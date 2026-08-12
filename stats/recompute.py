@@ -17,6 +17,7 @@ from stats.league_context import compute_division_contexts, compute_league_conte
 from stats.matchups import compute_matchups
 from stats.shrinkage import compute_batting_true_talent, compute_pitching_true_talent
 from stats.spray import compute_batter_spray
+from stats.team_strength import compute_team_strength
 from stats.war import compute_batting_war, compute_pitching_war
 
 
@@ -41,6 +42,10 @@ def recompute_league_season(session: Session, league_season_id: int) -> None:
     # these three doesn't matter, they're just grouped here for one pass.
     compute_batter_spray(session, league_season_id)
     compute_matchups(session, league_season_id)
+    # Reads Game rows directly (results and division membership), so it needs
+    # none of the aggregations above and nothing downstream reads it — its
+    # position here is arbitrary, like aggregate_fielding's.
+    compute_team_strength(session, league_season_id)
     compute_batting_war(session, league_season_id)
     compute_pitching_war(session, league_season_id)
 

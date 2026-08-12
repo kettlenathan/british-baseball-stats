@@ -86,6 +86,11 @@ STAT_LABELS = {
     "division": "Division", "wrc_plus_div": "wRC+ vs Div", "era_plus_div": "ERA+ vs Div",
     "divisions": "Divisions", "teams": "Teams", "games": "G",
     "r_per_team_game": "R/Team/G", "lg_woba": "Lg wOBA", "lg_era": "Lg ERA",
+    # Bradley-Terry outputs (stats/team_strength.py). "Rating" is log-odds
+    # against a division-average opponent and is comparable only within a
+    # division; "SOS" is schedule difficulty against a balanced-draw baseline.
+    "rating": "Rating", "sos": "SOS", "rating_se": "Rating ±",
+    "expected_win_pct": "xWin%",
     "opponent": "Opponent", "position": "Position", "jersey_number": "No.",
     "po": "PO", "a": "A", "e": "E", "dp": "DP", "fpct": "FPCT",
     "avg_risp": "AVG w/RISP", "r_pg": "R/G", "ra_pg": "RA/G", "lob_pg": "LOB/G",
@@ -116,6 +121,7 @@ STAT_FORMAT = {
     "era": ".2f", "whip": ".2f", "k9": ".1f", "bb9": ".1f", "fip": ".2f",
     "era_plus": ".0f", "ip": ".1f", "pct": ".3f", "year": ".0f",
     "wrc_plus_div": ".0f", "era_plus_div": ".0f",
+    "rating": "+.2f", "sos": "+.2f", "rating_se": ".2f", "expected_win_pct": ".1%",
     "r_per_team_game": ".2f", "lg_woba": ".3f", "lg_era": ".2f",
     "games": ",.0f", "teams": ",.0f", "divisions": ",.0f",
     "pa": ",.0f", "ab": ",.0f", "h": ",.0f", "hr": ",.0f", "rbi": ",.0f",

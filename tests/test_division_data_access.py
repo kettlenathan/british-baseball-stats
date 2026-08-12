@@ -23,6 +23,7 @@ from db.models import (
     Team,
     TeamSeason,
 )
+from stats.team_strength import compute_team_strength
 
 
 @pytest.fixture(autouse=True)
@@ -260,6 +261,64 @@ def test_division_environments_exposes_the_scoring_gap(session):
     assert df.loc["North", "r_per_team_game"] == 14.0
     assert df.loc["South", "r_per_team_game"] == 1.5
     assert df.loc["North", "lg_woba"] > df.loc["South", "lg_woba"]
+
+
+def test_standings_carries_rating_and_sos_once_fitted(session):
+    ls, teams, divisions = _build(session)
+    # Alternating venues: with N1 always at home the fit would rightly credit
+    # home advantage rather than N1, and no rating difference would emerge.
+    for i in range(6):
+        home, away = (teams["N1"], teams["N2"]) if i % 2 else (teams["N2"], teams["N1"])
+        home_score, away_score = (8, 1) if i % 2 else (1, 8)
+        _add_game(session, ls, home, away, source_id=i, home_score=home_score,
+                  away_score=away_score, division=divisions["North"])
+    compute_team_strength(session, ls.id)
+
+    df = data_access.standings(ls.id).set_index("team")
+
+    assert df.loc["N1", "rating"] > df.loc["N2", "rating"]
+    assert df.loc["N1", "sos"] is not None
+
+
+def test_standings_omits_rating_when_nothing_is_fitted(session):
+    """The columns must not appear at all rather than arriving full of nulls,
+    since the page keys its explanatory caption off their presence."""
+    ls, teams, divisions = _build(session)
+    _add_game(session, ls, teams["N1"], teams["N2"], source_id=1, home_score=3,
+              away_score=2, division=divisions["North"])
+
+    df = data_access.standings(ls.id)
+
+    assert "rating" not in df.columns
+
+
+def test_team_division_includes_strength_when_available(session):
+    ls, teams, divisions = _build(session)
+    # Alternating venues: with N1 always at home the fit would rightly credit
+    # home advantage rather than N1, and no rating difference would emerge.
+    for i in range(6):
+        home, away = (teams["N1"], teams["N2"]) if i % 2 else (teams["N2"], teams["N1"])
+        home_score, away_score = (8, 1) if i % 2 else (1, 8)
+        _add_game(session, ls, home, away, source_id=i, home_score=home_score,
+                  away_score=away_score, division=divisions["North"])
+    compute_team_strength(session, ls.id)
+
+    info = data_access.team_division(ls.id, "N1")
+
+    assert info["rating"] > 0
+    assert 0.5 < info["expected_win_pct"] <= 1.0
+    assert info["sos"] is not None
+
+
+def test_team_division_strength_fields_are_none_when_unfitted(session):
+    ls, teams, divisions = _build(session)
+    _add_game(session, ls, teams["N1"], teams["N2"], source_id=1, home_score=3,
+              away_score=2, division=divisions["North"])
+
+    info = data_access.team_division(ls.id, "N1")
+
+    assert info["division"] == "North"
+    assert info["rating"] is None
 
 
 def test_filter_by_division_narrows_and_passes_through(session):

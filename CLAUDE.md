@@ -31,6 +31,10 @@ uv run python -m scripts.refresh_data --leagues nbl --years 2026   # scrape + re
 # to run against a database that is about to be published.
 uv run python -m scripts.backfill_divisions
 uv run python -m scripts.backfill_divisions --allow-fetch   # fetch anything not cached
+
+# Does the Bradley-Terry rating beat a plain win-% baseline? Re-run before
+# changing stats/team_strength.py.
+uv run python -m scripts.validate_strength
 uv run python -m scripts.refresh_data --leagues nbl --years 2026 --last-week   # mid-season: only recent games
 
 # DB schema migrations (Alembic; models.py is the source of truth)
@@ -156,7 +160,14 @@ writes back upstream.
   different years, so matching by name would join unrelated groupings. Division counts churn
   too (the NBL was one undivided table 2021-2025 and splits North/South for the first time in
   2026; Division 2 has gone 2→3→1→2→3→2 over six years), so every consumer must handle a
-  league_season with one division or none. ~10 team_seasons appear in fixtures but never in a
+  league_season with one division or none. **There is no promotion or relegation in these
+  leagues** — teams sign up to whichever league they please each year and frequently disband,
+  re-form or rejoin under a different name, which is the actual cause of that churn. Two
+  consequences: a league code is a self-selected entry level rather than an enforced skill
+  tier, so never assume `nbl` > `d2` > … implies relative strength; and cross-year `Team`
+  identity (matched on `name`, see `db/upsert.py`) is unreliable, since a renamed
+  continuation becomes a new `Team` row — 60 of 160 teams appear in only one year. Anything
+  pooling across seasons should lean on player-level links rather than team continuity. ~10 team_seasons appear in fixtures but never in a
   published standings table and keep a NULL `division_id`; they are surfaced in the UI under
   "Not in a published division" rather than dropped, the same principle as the `"UNK"`
   fielding position.
@@ -274,6 +285,31 @@ writes back upstream.
   `app/pages/3_Player_Page.py`'s tendency/spray-chart/matchup sections; career values are
   summed across these season rows at read time in `app/components/data_access.py`, not
   stored separately.
+- `team_strength.py` — Bradley-Terry team ratings, because a win-loss record is not
+  comparable even *within* a division: schedules are unbalanced (2026 D3 Central's Milton
+  Keynes played the bottom team 6× and second-placed Cambridge 2×, while Cambridge played the
+  bottom team 6× and Milton Keynes 2×). Fitted on outcomes, **not run margin** — margins here
+  are blowout-heavy (median 6 runs, 33% of games decided by 10+, max 38) *and* censored by
+  mercy rules, so a rout records when the game was halted rather than how one-sided it was;
+  fitting that as a clean continuous signal would give confident wrong answers. The fit is
+  L2-penalised because an undefeated team (Milton Keynes went 18-0) has no finite
+  unpenalised MLE, with λ chosen by 5-fold CV on this league-season's own games and a fixed
+  fallback below `MIN_GAMES_FOR_CV`, recorded per row as `lambda_self_calibrated` exactly like
+  `shrinkage.py`'s `k`. Home advantage enters as the (unpenalised) intercept, fitted once per
+  league-season since a 4-team division can't estimate it — it comes out at 0.119 log-odds,
+  matching the measured 53.5% raw home win rate. **`rating` is comparable only within one
+  division**: divisions play no regular-season games against each other, so nothing fixes
+  their relative level and each division is centred on its own mean; comparing across
+  divisions would assert they are equally strong, which is the open question. `sos` is
+  measured against a *balanced-draw baseline* (mean rating of the division's other teams),
+  not as a bare mean opponent rating — under a bare mean a team never plays itself, so the
+  best team in any division automatically looks like it had the easiest schedule, which would
+  corrupt the exact comparison this exists for. Core fit is DB-free like `lineup.py`.
+  `scripts/validate_strength.py` is the held-out-game harness: the rating beats a win-%
+  baseline by only 0.7% log loss overall, but that is ~0 where schedules are balanced against
+  ~+0.015 (3%) where they are skewed — the honest case is that it costs nothing when the
+  record is already fair and corrects it when it isn't, not that it predicts better on
+  average. Re-run it before changing the model.
 - `war.py` — simplified batting/pitching WAR. **It is offense-only / FIP-only: there is no
   defensive component at all.** The box-score play-by-play does carry a coarse batted-ball
   proxy (pull direction, distance, ground/fly/line/pop type — `PlateAppearance`, used for

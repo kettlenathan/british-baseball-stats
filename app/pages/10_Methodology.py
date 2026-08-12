@@ -91,6 +91,52 @@ st.markdown(
 
 st.divider()
 
+st.subheader("Team strength rating and strength of schedule")
+st.markdown(
+    "Even inside a single division, schedules aren't balanced. In 2026's Division 3 Central, "
+    "Milton Keynes played bottom-placed Essex Archers four times and second-placed Cambridge "
+    "Sovereigns only twice — while Cambridge played Essex **six** times and Milton Keynes "
+    "twice. Two records built on schedules like that aren't quite measuring the same thing."
+)
+st.markdown(
+    "The **Rating** column estimates each team's strength from *who they actually played*, "
+    "using a Bradley-Terry model — the standard approach for ranking from head-to-head "
+    "results. It's on a log-odds scale where **0 is a division-average team**; +1 means "
+    "beating that average team about 73% of the time at a neutral venue. **SOS** is how much "
+    "harder the schedule was than an even draw within the same division would have been, so "
+    "a negative SOS means an easier run than the raw record suggests."
+)
+st.markdown(
+    "Two deliberate choices. The rating uses **only who won**, not the score — run margins in "
+    "this league are dominated by blowouts (a third of games are decided by 10 or more) and "
+    "are cut short by mercy rules, so a big margin often records when a game was stopped "
+    "rather than how one-sided it was. And the estimate is **pulled toward the division "
+    "average**, more so for teams with few games, which is also what stops an undefeated "
+    "record producing an infinite rating."
+)
+st.markdown(
+    "SOS is measured against a balanced draw rather than as a simple average of opponents "
+    "faced, because a team never plays itself: under a simple average the best team in any "
+    "division would automatically appear to have had the easiest schedule, which is an "
+    "artefact rather than a finding."
+)
+st.markdown(
+    "**These ratings compare teams within one division only.** Divisions play no "
+    "regular-season games against each other, so each division's ratings are centred on its "
+    "own average, and a +1.5 in one division does not mean the same thing as a +1.5 in "
+    "another. Comparing them across divisions would assume the divisions are equally strong, "
+    "which is the question, not the answer."
+)
+st.markdown(
+    "Tested by holding out games and predicting them: the rating beats ranking teams by win "
+    "percentage by a small margin overall (0.7% on log loss), and that margin is "
+    "concentrated almost entirely in the teams with lopsided schedules, where it is around "
+    "3%. Where a schedule is already balanced, the rating and the raw record agree — which "
+    "is the point. Both are far better than guessing or than always picking the home team."
+)
+
+st.divider()
+
 st.subheader("Following a player across seasons")
 st.markdown(
     "The source site issues a **new player ID every season** — the same player on the same "

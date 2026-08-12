@@ -73,7 +73,7 @@ PITCHING_COLUMN_CONFIG = _build(
 
 PCT_COLUMN_CONFIG = _build(
     [
-        "team", "division", "w", "l", "t", "pct",
+        "team", "division", "w", "l", "t", "pct", "rating", "sos",
         # division_environments' columns, shown in the same standings tab.
         "games", "r_per_team_game", "lg_woba", "lg_era", "pa",
     ]

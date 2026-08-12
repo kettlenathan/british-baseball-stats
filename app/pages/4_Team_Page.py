@@ -59,6 +59,37 @@ if division_info:
         "division's without adjustment."
     )
 
+    if division_info.get("rating") is not None:
+        rating_col, sos_col, expected_col = st.columns(3)
+        rating_col.metric(
+            "Strength rating",
+            f"{division_info['rating']:+.2f}",
+            help=(
+                "Bradley-Terry estimate accounting for who this team actually played. "
+                "0 is a division-average team. Comparable within this division only."
+            ),
+        )
+        sos = division_info["sos"]
+        sos_col.metric(
+            "Strength of schedule",
+            f"{sos:+.2f}",
+            # Framed as easier/harder rather than good/bad: a soft draw is not
+            # a failing, and Streamlit's own red/green delta arrows would imply
+            # a judgement the number doesn't carry.
+            delta="harder draw" if sos > 0 else "easier draw",
+            delta_color="off",
+            help=(
+                "How much stronger the opponents faced were than an even draw inside this "
+                "division would have given. Negative means an easier run than the "
+                "schedule alone suggests."
+            ),
+        )
+        expected_col.metric(
+            "Expected win %",
+            f"{division_info['expected_win_pct']:.1%}",
+            help="Against an average opponent from this division, at a neutral venue.",
+        )
+
 st.subheader("Team stats")
 stats_df = team_season_stats(league_season_id)
 team_stats_row = stats_df[stats_df["team"] == team]

@@ -142,6 +142,14 @@ with tab_standings:
             "so records in different blocks were built against different opposition "
             "and are not directly comparable."
         )
+        if "rating" in df.columns and df["rating"].notna().any():
+            st.caption(
+                "**Rating** is a Bradley-Terry strength estimate that accounts for who each "
+                "team actually played, on a log-odds scale where 0 is a division-average "
+                "team. **SOS** is how much harder the schedule was than an even draw would "
+                "have been — negative means an easier run. Both are comparable *within* a "
+                "division only; nothing here compares one division to another."
+            )
         for name in df["division"].dropna().unique():
             st.subheader(name)
             st.dataframe(

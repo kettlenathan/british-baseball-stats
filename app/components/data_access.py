@@ -34,6 +34,7 @@ from db.models import (
     Season,
     Team,
     TeamSeason,
+    TeamStrength,
 )
 from stats.advanced_stats import era_plus, fip, wrc_plus
 from stats.advanced_stats import woba as compute_woba
@@ -570,6 +571,31 @@ def standings(league_season_id: int, regular_season_only: bool = True) -> pd.Dat
         if df.empty:
             return df
         df["pct"] = df["w"] / (df["w"] + df["l"] + df["t"]).replace(0, pd.NA)
+
+        # Rating and schedule difficulty, where they've been computed. Joined
+        # on rather than recomputed: stats/team_strength.py owns the model,
+        # this layer only displays it.
+        strength = {
+            row.team_season_id: row
+            for row in session.execute(
+                select(TeamStrength)
+                .join(TeamSeason, TeamSeason.id == TeamStrength.team_season_id)
+                .where(TeamSeason.league_season_id == league_season_id)
+            ).scalars()
+        }
+        if strength and regular_season_only:
+            by_team = {
+                ts.display_name: strength.get(ts.id)
+                for ts in team_seasons
+                if ts.id in strength
+            }
+            df["rating"] = df["team"].map(
+                lambda name: by_team[name].rating if by_team.get(name) else None
+            )
+            df["sos"] = df["team"].map(
+                lambda name: by_team[name].sos if by_team.get(name) else None
+            )
+
         return (
             df.sort_values(["_division_sort", "pct"], ascending=[True, False])
             .drop(columns=["_division_sort"])
@@ -606,6 +632,15 @@ def team_division(league_season_id: int, team_name: str) -> dict | None:
         in_division = table[table["division"] == name].reset_index(drop=True)
         position = in_division.index[in_division["team"] == team_name]
 
+        strength = session.execute(
+            select(TeamStrength)
+            .join(TeamSeason, TeamSeason.id == TeamStrength.team_season_id)
+            .where(
+                TeamSeason.league_season_id == league_season_id,
+                TeamSeason.display_name == team_name,
+            )
+        ).scalar_one_or_none()
+
         return {
             "division": name,
             "rank": int(position[0]) + 1 if len(position) else None,
@@ -613,6 +648,10 @@ def team_division(league_season_id: int, team_name: str) -> dict | None:
             "lg_woba": ctx.lg_woba if ctx else None,
             "lg_era": ctx.lg_era if ctx else None,
             "games": ctx.games if ctx else 0,
+            "rating": strength.rating if strength else None,
+            "rating_se": strength.rating_se if strength else None,
+            "sos": strength.sos if strength else None,
+            "expected_win_pct": strength.expected_win_pct if strength else None,
         }
     finally:
         session.close()

@@ -652,6 +652,63 @@ class DivisionContext(Base):
     computed_at: Mapped[dt.datetime] = mapped_column(DateTime, default=_now)
 
 
+class TeamStrength(Base):
+    """Bradley-Terry rating for one team's season, fitted on the games it
+    actually played — see stats/team_strength.py.
+
+    Exists because a bare win-loss record is not comparable even between two
+    teams in the *same* division: the schedules are unbalanced. In 2026's
+    Division 3 Central, Milton Keynes played the bottom team six times and
+    second-placed Cambridge only twice, so their 18-0 and Cambridge's 10-4
+    were built against materially different opposition.
+
+    **`rating` is comparable only within one division.** Divisions play no
+    regular-season games against each other at all, so nothing in the data
+    fixes their relative level, and each division's ratings are centred on
+    its own mean by construction. Comparing a rating across divisions would
+    silently assert the two divisions are equally strong — which is the open
+    question, not an answer. Cross-division offsets are a separate exercise
+    resting on players who appear in more than one division.
+    """
+
+    __tablename__ = "team_strength"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    team_season_id: Mapped[int] = mapped_column(
+        ForeignKey("team_seasons.id"), unique=True, index=True
+    )
+    # Log-odds strength, centred on this team's own division. 0 is a
+    # division-average team; +1 means beating that average team about 73% of
+    # the time at a neutral site.
+    rating: Mapped[float | None] = mapped_column(Float, nullable=True)
+    rating_se: Mapped[float | None] = mapped_column(Float, nullable=True)
+    # Schedule difficulty: how much stronger the opponents actually faced
+    # were than the ones a perfectly balanced schedule would have given.
+    # Positive is a harder draw than the division's other teams average.
+    # Measured against that balanced baseline rather than as a bare mean
+    # opponent rating, because a team never plays itself — so under a raw
+    # mean the best team in any division automatically appears to have had
+    # the easiest schedule, which would corrupt the exact comparison this
+    # exists to support. Zero for a balanced round robin, by construction.
+    sos: Mapped[float | None] = mapped_column(Float, nullable=True)
+    # Win probability against an average opponent from this team's division
+    # at a neutral site — `rating` on a scale people can read.
+    expected_win_pct: Mapped[float | None] = mapped_column(Float, nullable=True)
+
+    games: Mapped[int] = mapped_column(Integer, default=0)
+    wins: Mapped[int] = mapped_column(Integer, default=0)
+    losses: Mapped[int] = mapped_column(Integer, default=0)
+    ties: Mapped[int] = mapped_column(Integer, default=0)
+
+    # Fit diagnostics. Both describe the whole league-season rather than this
+    # one team, and are denormalised onto each row so a row explains itself —
+    # the same reasoning as BattingTrueTalent.stabilization_pa.
+    home_advantage: Mapped[float | None] = mapped_column(Float, nullable=True)
+    ridge_lambda: Mapped[float | None] = mapped_column(Float, nullable=True)
+    lambda_self_calibrated: Mapped[bool] = mapped_column(Boolean, default=False)
+    computed_at: Mapped[dt.datetime] = mapped_column(DateTime, default=_now)
+
+
 class BattingWar(Base):
     __tablename__ = "batting_war"
 
