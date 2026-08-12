@@ -88,13 +88,14 @@ st.divider()
 
 st.subheader("Why I built this")
 st.markdown(
-    "I play in this league. That's the whole reason this exists.\n\n"
-    "Every winter I'd go looking for my own numbers from the season just gone, and every "
-    "winter I'd find the same thing: the data was all *there* — the federation's platform "
-    "records every game, every at-bat, every error — but it was locked in a box score at a "
-    "time. You could see what happened last Sunday. You couldn't see whether you'd actually "
-    "improved since 2023, or how your team's offence stacked up against the rest of the "
-    "division, or who was quietly having the best season in the country."
+    "I've been playing baseball in the UK since I was a kid at HJBC, the best part of "
+    "twenty years ago, and for a handful of teams at various levels since.\n\n"
+    "The BBF site does have season and career pages — hits, average, walks, the "
+    "basics — which is more than plenty of leagues manage. But it stops exactly "
+    "where the interesting questions start. It'll tell you your average. It won't "
+    "tell you your OPS+, or how that average looks against everyone else in your league. "
+    "I wanted to look at my own baseball career and see something more "
+    "than a batting average."
 )
 st.markdown(
     "British baseball is small. There are no beat writers, no analytics departments, no one "
@@ -130,7 +131,7 @@ st.markdown(
     "it for myself and my own team long before I put it online."
 )
 st.markdown(
-    "What it does cost is evenings. Chasing down why a stat looked wrong, backfilling five "
+    "What it does cost is evenings. Chasing down bugs, backfilling five "
     "years of history, working out how to follow a player across seasons when the source "
     "site gives them a new ID every year. If any of that has been useful to you — if you've "
     "used it to settle an argument in a dugout, or found your own name on a leaderboard and "
@@ -152,4 +153,4 @@ st.markdown(
 )
 
 st.divider()
-st.caption("Thanks for reading, and thanks for playing. See you at the field. — Nathan")
+st.caption("Thanks for reading, and thanks for playing. See you on the field. — Nathan")
