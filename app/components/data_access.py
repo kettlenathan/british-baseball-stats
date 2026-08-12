@@ -1831,7 +1831,7 @@ def batter_pitcher_matchups_career(full_name: str, as_batter: bool) -> pd.DataFr
 
 
 # --------------------------------------------------------------------------
-# Scouting report (app/pages/8_Scouting_Report.py)
+# Scouting report (app/pages/9_Scouting_Report.py)
 # --------------------------------------------------------------------------
 
 

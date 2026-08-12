@@ -118,7 +118,7 @@ st.markdown(
     "things the underlying data genuinely can't support — I'd rather tell you where the "
     "numbers run out than quietly make something up."
 )
-st.page_link("pages/10_Methodology.py", label="Read the methodology", icon="📖")
+st.page_link("pages/11_Methodology.py", label="Read the methodology", icon="📖")
 
 st.divider()
 

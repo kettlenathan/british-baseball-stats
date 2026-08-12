@@ -63,12 +63,12 @@ pages = [
     st.Page("pages/5_Player_Comparison.py", title="Player Comparison", icon="🆚"),
     st.Page("pages/6_Team_Comparison.py", title="Team Comparison", icon="📈"),
     st.Page("pages/7_Batter_Archetypes.py", title="Batter Archetypes", icon="🧬"),
-    st.Page("pages/9_Division_Strength.py", title="Division Strength", icon="⚖️"),
-    st.Page("pages/8_Scouting_Report.py", title="Scouting Report", icon="🎯"),
-    st.Page("pages/10_Methodology.py", title="Methodology", icon="📖"),
-    st.Page("pages/11_Feedback_And_Support.py", title="Feedback & Support", icon="💬"),
+    st.Page("pages/8_Division_Strength.py", title="Division Strength", icon="⚖️"),
+    st.Page("pages/9_Scouting_Report.py", title="Scouting Report", icon="🎯"),
+    st.Page("pages/11_Methodology.py", title="Methodology", icon="📖"),
+    st.Page("pages/12_Feedback_And_Support.py", title="Feedback & Support", icon="💬"),
 ]
 if not is_deployed():
-    pages.insert(10, st.Page("pages/9_Data_Admin.py", title="Data Admin", icon="🛠️"))
+    pages.insert(10, st.Page("pages/10_Data_Admin.py", title="Data Admin", icon="🛠️"))
 
 st.navigation(pages).run()

@@ -1,5 +1,5 @@
 """Batting-order recommendation for the scouting report
-(app/pages/8_Scouting_Report.py): turn each available batter into a per-PA
+(app/pages/9_Scouting_Report.py): turn each available batter into a per-PA
 outcome profile, evaluate a batting order's expected runs with an exact
 Markov chain over base-out states, and search for the best order.
 

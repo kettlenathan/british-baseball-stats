@@ -1,5 +1,5 @@
 """Opponent pitching-staff usage and probable-starter inference for the
-scouting report (app/pages/8_Scouting_Report.py).
+scouting report (app/pages/9_Scouting_Report.py).
 
 The site publishes no rotation or probable-pitcher information, so "who are
 we likely to face" has to be inferred from what the staff has actually done.

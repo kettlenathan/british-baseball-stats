@@ -90,7 +90,7 @@ STAT_LABELS = {
     # against a division-average opponent and is comparable only within a
     # division; "SOS" is schedule difficulty against a balanced-draw baseline.
     "rating": "Rating", "sos": "SOS", "rating_se": "Rating ±",
-    # Division comparison (app/pages/9_Division_Strength.py). Labelled by what
+    # Division comparison (app/pages/8_Division_Strength.py). Labelled by what
     # each measures rather than by its mechanism: a reader needs to know one
     # column comes from scoring and the other from shared players.
     "env_gap": "Scoring Gap", "bridge_gap": "Same-Player Gap",

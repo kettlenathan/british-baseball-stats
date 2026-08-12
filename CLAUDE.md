@@ -43,7 +43,7 @@ uv run alembic revision --autogenerate -m "..."
 uv run alembic upgrade head
 ```
 
-The Data Admin page in the Streamlit app (`app/pages/9_Data_Admin.py`) also runs
+The Data Admin page in the Streamlit app (`app/pages/10_Data_Admin.py`) also runs
 `scripts.refresh_data` as a subprocess, so scraper changes are exercised from the UI too —
 this trigger is disabled when `IS_DEPLOYED` is set in `st.secrets` (see "Deployment" below).
 
@@ -455,7 +455,7 @@ writes back upstream.
 - `app/env.py` holds `is_deployed()`, the one shared signal for "running on the hosted
   Community Cloud deployment vs. locally" — reads an `IS_DEPLOYED` secret that's only ever
   set via the Community Cloud dashboard, never committed. `Home.py` uses it to decide whether
-  to include the Data Admin page in navigation at all; `9_Data_Admin.py` also checks it
+  to include the Data Admin page in navigation at all; `10_Data_Admin.py` also checks it
   directly as defense in depth.
 - Division-aware presentation: `filters.py`'s `division_selector` renders nothing at all when
   a league_season has fewer than two divisions (a season that was never split has no
@@ -517,7 +517,19 @@ writes back upstream.
   than the clustering inputs — includes ISO/Center%/1B%/raw Pull%/Oppo% for descriptive context
   even though they aren't clustering features), and a static reference expander mapping each
   pairwise archetype dimension to a real, well-known MLB career.
-- `app/pages/8_Scouting_Report.py` — opponent prep: pick your team + opponent (defaulting to
+- `app/pages/8_Division_Strength.py` renders `data_access.division_comparison` — the
+  cross-division question, and the one page whose *job is to be secondary*. It opens by
+  pointing at the Leaderboards' `wRC+`/`wRC+ vs Div` pair as the recommended way to read
+  across divisions, and exists only for what that pair cannot answer: **why** a division
+  scored as it did. Its three columns are the scoring gap, the same-player gap, and their
+  difference, all in wRC+ points relative to the league-season. It deliberately publishes **no
+  team-level verdict** — no head-to-head win probability, no cross-division team ranking (see
+  `stats/division_strength.py` for the measurements behind that removal, and
+  `test_no_team_level_verdict_is_exposed`) — and states the uncorrected selection bias plainly
+  as "trust the direction more than the size". Keep that framing and that ceiling if the page
+  changes; the temptation to collapse the two readings into one adjusted number is exactly
+  what the measurements ruled out.
+- `app/pages/9_Scouting_Report.py` — opponent prep: pick your team + opponent (defaulting to
   the next `status == "scheduled"` fixture via `data_access.next_fixtures`), see probable
   pitchers (`stats/probable_pitchers.py`) and a recommended batting order
   (`stats/lineup.py`, hand-adjustable vs the probable starter), and download the full report
@@ -534,10 +546,10 @@ writes back upstream.
   and calls out the positions most above it as the ones worth testing; a "can we run on
   them?" block does the same for the opponent's catchers, comparing their CS% to the league
   average to give a run/hold verdict.
-- `app/pages/9_Data_Admin.py` runs the scraper/recompute pipeline as a subprocess from the
+- `app/pages/10_Data_Admin.py` runs the scraper/recompute pipeline as a subprocess from the
   UI and shows recent `ScrapeLog` activity. Only reachable at all when `is_deployed()` is
   False (see above); its own live-refresh controls are additionally gated the same way.
-- `app/pages/10_Methodology.py` documents the wOBA/wRC+/FIP/ERA+/WAR formulas and what's
+- `app/pages/11_Methodology.py` documents the wOBA/wRC+/FIP/ERA+/WAR formulas and what's
   fixed (published linear weight coefficients, `stats/constants.py`) vs. self-calibrated per
   league-season (`stats/league_context.py`), plus the fixed-geometry pull-tendency/spray-chart
   approximation, the first-pitch-strike% count-diffing method, the matchup table's
@@ -549,7 +561,7 @@ writes back upstream.
   scouting report's probable-pitcher inference and lineup-optimizer model
   (`stats/probable_pitchers.py`, `stats/lineup.py`) — keep it in sync if any of those
   modules' approach changes.
-- `app/pages/11_Feedback_And_Support.py` is one page doing two jobs. Its form files a GitHub
+- `app/pages/12_Feedback_And_Support.py` is one page doing two jobs. Its form files a GitHub
   issue against `config.GITHUB_REPO` via the REST API, authenticated with a `GITHUB_TOKEN`
   secret (Community Cloud dashboard or a local `.streamlit/secrets.toml` for testing — never
   committed); it degrades to an explanatory message if the secret isn't configured, rather
@@ -564,11 +576,15 @@ writes back upstream.
 - Page order in `Home.py`'s `st.navigation()` list groups thematically rather than just
   following filename numbers: overview (Home) → league-wide stat views (Leaderboards, Player
   Explorer) → single-entity deep dives (Player Page, Team Page) → multi-entity analysis
-  (Player Comparison, Team Comparison, Batter Archetypes) → game prep (Scouting Report) →
+  (Player Comparison, Team Comparison, Batter Archetypes, Division Strength) → game prep
+  (Scouting Report) →
   ops (Data Admin, dev-only, spliced in via `pages.insert()`) → meta/reference (Methodology,
   Feedback & Support). Filename number
   prefixes are kept in sync with this display order purely so the directory listing itself
-  reads sensibly to a human browsing it — Streamlit itself only honors list order.
+  reads sensibly to a human browsing it — Streamlit itself only honors list order. Adding a
+  page mid-list therefore means renumbering everything after it (`git mv`) and updating the
+  `st.Page` paths, the `pages.insert()` index, any `st.page_link` targets, and the module
+  comments that cite a page by path.
 
 ## Data refresh cadence
 
@@ -601,7 +617,7 @@ path (`scraper.pipeline.run()` then `stats.recompute.recompute_league_season()` 
   data with.
 - CLI: `uv run python -m scripts.refresh_data --leagues <codes> --years <spec>
   [--force-refresh] [--last-week | --last-month]`
-- The Data Admin page's "Run refresh" button (`app/pages/9_Data_Admin.py`), which shells out
+- The Data Admin page's "Run refresh" button (`app/pages/10_Data_Admin.py`), which shells out
   to the identical command (its own separate "Publish data" button handles publishing).
 
 Note that neither scheduled path has a PR/review step, so a bad scrape publishes directly —
@@ -717,7 +733,7 @@ gate its live-refresh controls if reached directly — `db/storage.py` also uses
 (without going through `app/`, since `db/` must not depend on `app/`) to decide whether it's
 safe to auto-refresh a stale local `data/stats.db` (see above).
 
-The Feedback & Support page (`app/pages/11_Feedback_And_Support.py`) needs a `GITHUB_TOKEN` secret (a PAT or
+The Feedback & Support page (`app/pages/12_Feedback_And_Support.py`) needs a `GITHUB_TOKEN` secret (a PAT or
 fine-grained token with Issues: write access on `config.GITHUB_REPO`) to file submissions as
 GitHub issues — without it, the page shows a "not configured" message instead of failing.
 Deliberately doesn't write feedback to `data/stats.db`: local file writes aren't reliably
