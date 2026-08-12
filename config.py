@@ -23,13 +23,18 @@ DB_URL = f"sqlite:///{DB_PATH}"
 
 BASE_URL = "https://stats.britishbaseball.org.uk"
 
-# This repo, used both by the Feedback page (app/pages/11_Feedback.py) to
-# file GitHub issues and by db/storage.py to publish/fetch data/stats.db as
-# a release asset. Feedback auth is a GITHUB_TOKEN secret (Community Cloud
+# This repo, used both by the Feedback & Support page
+# (app/pages/11_Feedback_And_Support.py) to file GitHub issues and by
+# db/storage.py to publish/fetch data/stats.db as a release asset.
+# Feedback auth is a GITHUB_TOKEN secret (Community Cloud
 # dashboard or local .streamlit/secrets.toml); publishing auth is a
 # GITHUB_TOKEN *environment* variable (CLI context, not a Streamlit one) —
 # never committed either way.
 GITHUB_REPO = "kettlenathan/british-baseball-stats"
+
+# Optional tip jar, linked from the Feedback & Support page. Nothing depends on it — the app
+# has no paid tier and no server costs to cover (Community Cloud hosts it free).
+DONATION_URL = "https://buymeacoffee.com/nathankettle"
 
 
 def is_deployed() -> bool:

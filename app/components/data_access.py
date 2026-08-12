@@ -1872,6 +1872,32 @@ def lineup_recommendation(
 
 
 @st.cache_data
+def coverage_summary() -> dict:
+    """Headline counts of what's in the database, for the Feedback & Support page.
+
+    Read live rather than written into the copy so the page can't quietly go
+    stale as more seasons are scraped.
+    """
+    session = get_session()
+    try:
+        first_year, last_year = session.execute(
+            select(func.min(Season.year), func.max(Season.year))
+        ).one()
+        return {
+            "first_year": first_year,
+            "last_year": last_year,
+            "divisions": session.execute(select(func.count(League.id))).scalar() or 0,
+            "games": session.execute(
+                select(func.count(Game.id)).where(Game.status == "final")
+            ).scalar()
+            or 0,
+            "players": session.execute(select(func.count(Player.id))).scalar() or 0,
+        }
+    finally:
+        session.close()
+
+
+@st.cache_data
 def data_freshness() -> str | None:
     """Timestamp of the most recent scrape, for the PDF header."""
     session = get_session()

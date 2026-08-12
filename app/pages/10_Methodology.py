@@ -428,5 +428,5 @@ st.markdown(
 st.divider()
 st.caption(
     "Spotted something that looks wrong, or have a question about how a stat is calculated? "
-    "Use the Feedback page in the sidebar."
+    "Use the Feedback & Support page in the sidebar."
 )

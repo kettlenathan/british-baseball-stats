@@ -360,16 +360,24 @@ writes back upstream.
   scouting report's probable-pitcher inference and lineup-optimizer model
   (`stats/probable_pitchers.py`, `stats/lineup.py`) — keep it in sync if any of those
   modules' approach changes.
-- `app/pages/11_Feedback.py` files a GitHub issue against `config.GITHUB_REPO` via
-  the REST API, authenticated with a `GITHUB_TOKEN` secret (Community Cloud dashboard or a
-  local `.streamlit/secrets.toml` for testing — never committed). Degrades to an explanatory
-  message if the secret isn't configured, rather than failing.
+- `app/pages/11_Feedback_And_Support.py` is one page doing two jobs. Its form files a GitHub
+  issue against `config.GITHUB_REPO` via the REST API, authenticated with a `GITHUB_TOKEN`
+  secret (Community Cloud dashboard or a local `.streamlit/secrets.toml` for testing — never
+  committed); it degrades to an explanatory message if the secret isn't configured, rather
+  than failing. Below the form sits the project's background and a `config.DONATION_URL` tip
+  jar. The two were separate pages (Feedback, and a "Back Page") and were merged, so the
+  support copy points at the form *above it* rather than linking to another page. The ask is
+  deliberately low-pressure and states plainly that nothing depends on it (hosting is free,
+  there are no server costs) — keep that framing if the copy changes, and keep the free ways
+  to help ranked above the tip jar. Its coverage numbers come from
+  `data_access.coverage_summary` at read time rather than being written into the prose, so
+  they can't go stale as more seasons are scraped.
 - Page order in `Home.py`'s `st.navigation()` list groups thematically rather than just
   following filename numbers: overview (Home) → league-wide stat views (Leaderboards, Player
   Explorer) → single-entity deep dives (Player Page, Team Page) → multi-entity analysis
   (Player Comparison, Team Comparison, Batter Archetypes) → game prep (Scouting Report) →
   ops (Data Admin, dev-only, spliced in via `pages.insert()`) → meta/reference (Methodology,
-  Feedback). Filename number
+  Feedback & Support). Filename number
   prefixes are kept in sync with this display order purely so the directory listing itself
   reads sensibly to a human browsing it — Streamlit itself only honors list order.
 
@@ -520,7 +528,7 @@ gate its live-refresh controls if reached directly — `db/storage.py` also uses
 (without going through `app/`, since `db/` must not depend on `app/`) to decide whether it's
 safe to auto-refresh a stale local `data/stats.db` (see above).
 
-The Feedback page (`app/pages/11_Feedback.py`) needs a `GITHUB_TOKEN` secret (a PAT or
+The Feedback & Support page (`app/pages/11_Feedback_And_Support.py`) needs a `GITHUB_TOKEN` secret (a PAT or
 fine-grained token with Issues: write access on `config.GITHUB_REPO`) to file submissions as
 GitHub issues — without it, the page shows a "not configured" message instead of failing.
 Deliberately doesn't write feedback to `data/stats.db`: local file writes aren't reliably

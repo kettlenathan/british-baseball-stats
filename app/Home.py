@@ -65,7 +65,7 @@ pages = [
     st.Page("pages/7_Batter_Archetypes.py", title="Batter Archetypes", icon="🧬"),
     st.Page("pages/8_Scouting_Report.py", title="Scouting Report", icon="🎯"),
     st.Page("pages/10_Methodology.py", title="Methodology", icon="📖"),
-    st.Page("pages/11_Feedback.py", title="Feedback", icon="💬"),
+    st.Page("pages/11_Feedback_And_Support.py", title="Feedback & Support", icon="💬"),
 ]
 if not is_deployed():
     pages.insert(9, st.Page("pages/9_Data_Admin.py", title="Data Admin", icon="🛠️"))
