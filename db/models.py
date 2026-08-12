@@ -754,6 +754,56 @@ class TeamStrength(Base):
     computed_at: Mapped[dt.datetime] = mapped_column(DateTime, default=_now)
 
 
+class DivisionStrength(Base):
+    """How one division's standard compares to the rest — estimated from
+    players who appeared in more than one, since no regular-season game ever
+    links two divisions. See stats/division_strength.py.
+
+    `offset` is in wOBA points and says how much *easier to bat in* the
+    division was, so a positive value implies weaker pitching. `adjustment`
+    converts that onto the Bradley-Terry log-odds scale used by TeamStrength,
+    via a single scale factor fitted against the only games that can test it:
+    the 336 in the corpus that happen to cross divisions. Adding `adjustment`
+    to a TeamStrength.rating makes teams from different divisions comparable,
+    which the raw rating deliberately is not.
+
+    **This is the least certain number in the database, and the presentation
+    layer must keep saying so.** Held-out testing shows it genuinely beats
+    assuming divisions are equal — 3.7% better log loss on 305 cross-division
+    games none of the inputs had seen, with the scale factor coming out on
+    the theoretically correct sign in every fold — but the paired improvement
+    is only about two standard errors from zero, and comparisons between
+    individual teams routinely span "probably better" to "probably worse".
+    `bridge_players` and `standard_error` are stored so a caller can refuse
+    to make a claim a thin bridge cannot support.
+    """
+
+    __tablename__ = "division_strength"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    division_id: Mapped[int] = mapped_column(
+        ForeignKey("divisions.id"), unique=True, index=True
+    )
+    # wOBA points, centred on the average division across the whole corpus.
+    offset: Mapped[float | None] = mapped_column(Float, nullable=True)
+    standard_error: Mapped[float | None] = mapped_column(Float, nullable=True)
+    # offset * scale, i.e. the same quantity in Bradley-Terry log-odds, ready
+    # to add to TeamStrength.rating.
+    adjustment: Mapped[float | None] = mapped_column(Float, nullable=True)
+    adjustment_se: Mapped[float | None] = mapped_column(Float, nullable=True)
+
+    # How much evidence sits behind this division's estimate. Two divisions
+    # can have identical offsets and completely different trustworthiness.
+    bridge_players: Mapped[int] = mapped_column(Integer, default=0)
+    bridge_pa: Mapped[float] = mapped_column(Float, default=0.0)
+
+    # Fit-wide diagnostics, denormalised onto each row so a row explains
+    # itself — as with TeamStrength.home_advantage.
+    scale: Mapped[float | None] = mapped_column(Float, nullable=True)
+    identifying_players: Mapped[int] = mapped_column(Integer, default=0)
+    computed_at: Mapped[dt.datetime] = mapped_column(DateTime, default=_now)
+
+
 class BattingWar(Base):
     __tablename__ = "batting_war"
 

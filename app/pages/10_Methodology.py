@@ -138,6 +138,46 @@ st.markdown(
 
 st.divider()
 
+st.subheader("Comparing teams in different divisions")
+st.markdown(
+    "Because divisions never meet in the regular season, nothing in the results themselves "
+    "says whether one division is stronger than another. The Division Strength page "
+    "estimates it a different way: from **players who turned out in more than one "
+    "division**. When the same person bats in two, the difference in what they produce is "
+    "evidence about the difference between those divisions — the same reasoning behind "
+    "Major League Equivalencies."
+)
+st.markdown(
+    "Across the seasons here, 1,221 pairs of divisions share at least one player, which is "
+    "enough to link every division into a single connected network. The estimate uses only "
+    "*within-player* differences, so a player who appeared in one division contributes "
+    "nothing at all and cannot make their division look easy simply by being a good hitter."
+)
+st.markdown(
+    "The result is an **offset** in wOBA points saying how much easier a division was to "
+    "bat in, which implies weaker pitching. Turning that into a win probability needs one "
+    "further number — how much a wOBA point of difficulty is worth in games — and that is "
+    "fitted against the archive's cross-division games, mostly playoffs."
+)
+st.markdown(
+    "**How much to trust it.** Held out against 305 cross-division games that none of the "
+    "inputs had seen, this predicts better than assuming the divisions are equal, by about "
+    "4% on log loss, and the fitted conversion lands on the theoretically expected sign "
+    "every time. That is a real result. But the margin is only around twice its own "
+    "standard error, and the players who move between divisions are not a random sample — "
+    "someone guesting down a level is likely stronger than the division they are visiting, "
+    "which inflates the apparent gap in a way nothing here corrects for."
+)
+st.markdown(
+    "So the page reports an interval, and says plainly when two teams cannot be separated. "
+    "Milton Keynes Bucks' 20-0 in 2026 Division 3 Central against London Meteors' 19-5 in "
+    "Division 3 South comes out at roughly 59% to the Bucks — with an interval running from "
+    "21% to 89%. The honest answer to that particular question is still **too close to "
+    "call**, and that is a finding about the evidence rather than a gap in it."
+)
+
+st.divider()
+
 st.subheader("Forfeits, unscored games, and seasons still in progress")
 st.markdown(
     "Not every result on the record came from a game that was played. Two kinds turn up "

@@ -13,6 +13,7 @@ from sqlalchemy.orm import Session
 from db.engine import get_session
 from db.models import LeagueSeason
 from stats.aggregation import aggregate_batting, aggregate_fielding, aggregate_pitching
+from stats.division_strength import compute_division_strength
 from stats.league_context import compute_division_contexts, compute_league_context
 from stats.matchups import compute_matchups
 from stats.shrinkage import compute_batting_true_talent, compute_pitching_true_talent
@@ -54,6 +55,22 @@ def recompute_all(session: Session) -> None:
     league_season_ids = [row[0] for row in session.execute(select(LeagueSeason.id))]
     for league_season_id in league_season_ids:
         recompute_league_season(session, league_season_id)
+    recompute_cross_division(session)
+
+
+def recompute_cross_division(session: Session) -> None:
+    """Cross-division offsets, which are fitted across the whole database at
+    once rather than per league-season.
+
+    Separate from recompute_league_season for two reasons: the player bridges
+    that connect two divisions of one league routinely run through a third
+    division in another league or another year, so fitting a season in
+    isolation would discard most of the evidence; and it depends on
+    TeamStrength for every league-season, so it can only run once those
+    exist. Callers that recompute a subset of seasons should call this
+    afterwards — scripts/refresh_data.py does.
+    """
+    compute_division_strength(session)
 
 
 def main() -> None:

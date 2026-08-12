@@ -25,17 +25,18 @@ uv run python -m scraper.pipeline --leagues nbl --years 2026
 uv run python -m scraper.pipeline --leagues nbl,d2 --years 2024-2026 --force-refresh
 uv run python -m stats.recompute --league-season-id N   # omit flag to recompute all
 uv run python -m scripts.refresh_data --leagues nbl --years 2026   # scrape + recompute in one shot
+uv run python -m scripts.refresh_data --leagues nbl --years 2026 --last-week   # mid-season: only recent games
 
-# Backfill divisions/game phase for already-scraped seasons. Replays cached
-# schedule + standings responses from data/raw_cache — no network, so it is safe
-# to run against a database that is about to be published.
+# Backfill divisions, game phase and result type for already-scraped seasons.
+# Replays cached schedule + standings responses from data/raw_cache — no network,
+# so it is safe to run against a database that is about to be published.
 uv run python -m scripts.backfill_divisions
 uv run python -m scripts.backfill_divisions --allow-fetch   # fetch anything not cached
 
-# Does the Bradley-Terry rating beat a plain win-% baseline? Re-run before
-# changing stats/team_strength.py.
-uv run python -m scripts.validate_strength
-uv run python -m scripts.refresh_data --leagues nbl --years 2026 --last-week   # mid-season: only recent games
+# Validation harnesses. Both hold out games the models never saw; re-run the
+# relevant one before changing the model it guards.
+uv run python -m scripts.validate_strength            # stats/team_strength.py
+uv run python -m scripts.validate_division_strength   # stats/division_strength.py (the Phase 3 gate)
 
 # DB schema migrations (Alembic; models.py is the source of truth)
 uv run alembic revision --autogenerate -m "..."
@@ -254,7 +255,11 @@ writes back upstream.
   `config.DB_URL`, so the file is always there before anything else runs.
 
 ### `stats/`
-- `recompute.py` orchestrates the derivation pipeline in dependency order: aggregation
+- `recompute.py` orchestrates the derivation pipeline in dependency order. Note
+  `recompute_cross_division` is deliberately **outside** the per-league-season loop: division
+  offsets are fitted across the whole database at once, and a refreshed season can shift them
+  for seasons it didn't touch, so `scripts/refresh_data.py` calls it once after its loop.
+  Otherwise, in order: aggregation
   (game lines → season totals, including pitchers' first-pitch-strike% rollup from
   `PlateAppearance` and the per-position fielding rollup from `FieldingGameLine`) → league
   context → batter spray tendency → batter/pitcher matchups →
@@ -333,6 +338,34 @@ writes back upstream.
   complete) and the difficulty of the run-in is knowable — in 2026 D3 Central, Oxford Kings
   face a -1.27 remaining SOS while Cambridge face +0.60. Scheduled fixtures never influence
   the ratings themselves; only results can.
+- `division_strength.py` — the cross-division question: divisions never meet in the regular
+  season, so their relative standard is estimated from **players who appear in more than
+  one**. 1,221 pairs of division-seasons share a player, connecting all 78 into a single
+  component even requiring 25+ PA on both sides — which is what makes this possible at all,
+  since only 88 of the 336 cross-division games have a *direct* same-season bridge for their
+  own division pair; the rest depend on longer paths, so the fit is **global**, never per
+  league-season. A two-way fixed-effects model on wOBA (`wOBA = talent(player) +
+  offset(division)`, weighted by PA) with **unpenalised player effects**, so offsets are
+  identified purely from *within-player* variation: a single-division player contributes
+  exactly nothing and cannot make their division look easy by being good — the tests assert
+  this directly. Implemented by within-player demeaning rather than a design matrix with
+  10k player columns, which also makes that identifying assumption visible in the code.
+  A positive offset means *easier to bat in*, so it implies weaker pitching; converting it
+  to win probability needs one scale factor that batting data cannot supply, fitted by
+  `fit_strength_scale` against the cross-division games (−8.6 log-odds per wOBA point).
+  Standard errors use the **per-PA** residual variance, not the stint-level spread — scaling
+  by the latter understates intervals by more than an order of magnitude and would make
+  thinly-bridged divisions look settled. **`scripts/validate_division_strength.py` is the
+  gate and must be re-run before changing any of this**: it holds out the 336 cross-division
+  games fold by fold (nothing else in the pipeline touches them, so there is no leakage) and
+  currently shows the offsets beat assuming divisions are equal by 3.7% log loss on 305
+  scorable games, with the scale factor landing on the theoretically correct negative sign in
+  every fold. **But the margin is only ~2 standard errors** (bootstrap 95% CI [+0.0005,
+  +0.0504]), so individual team comparisons routinely span "probably wins" to "probably
+  loses" — `head_to_head`'s `decisive` flag exists so the UI says which, and the Division
+  Strength page leads with that caveat rather than burying it. The known uncorrected bias is
+  selection: a player who moves between divisions is likelier to be guesting down than a
+  random sample, which inflates the gap.
 - `war.py` — simplified batting/pitching WAR. **It is offense-only / FIP-only: there is no
   defensive component at all.** The box-score play-by-play does carry a coarse batted-ball
   proxy (pull direction, distance, ground/fly/line/pop type — `PlateAppearance`, used for

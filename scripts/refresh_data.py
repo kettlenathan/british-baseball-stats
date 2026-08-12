@@ -11,7 +11,7 @@ import sys
 
 from db.engine import get_session
 from scraper.pipeline import _parse_years, _resolve_since, run
-from stats.recompute import recompute_league_season
+from stats.recompute import recompute_cross_division, recompute_league_season
 
 
 def main() -> None:
@@ -52,6 +52,10 @@ def main() -> None:
     try:
         for league_season_id in set(league_season_ids):
             recompute_league_season(session, league_season_id)
+        # Cross-division offsets are fitted over the whole database at once,
+        # so they run after the per-season loop rather than inside it — a
+        # refreshed season can shift them even for seasons untouched here.
+        recompute_cross_division(session)
     finally:
         session.close()
     print("Done.")
